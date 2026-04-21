@@ -1,0 +1,47 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 0 },
+
+  "configurePresets": [
+    {
+      "name": "base-firmware",
+      "hidden": true,
+      "toolchainFile": "${sourceDir}/cmake/arm-none-eabi.cmake",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "base-firmware-debug",
+      "hidden": true,
+      "inherits": "base-firmware",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "DEBUG": "ON"
+      }
+    },
+
+    { "name": "v3.1",         "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v3.1" } },
+    { "name": "v3.2",         "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v3.2" } },
+    { "name": "v3.3",         "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v3.3" } },
+    { "name": "v3.4-24V",     "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v3.4-24V" } },
+    { "name": "v3.4-48V",     "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v3.4-48V" } },
+    { "name": "v3.5-24V",     "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v3.5-24V" } },
+    { "name": "v3.5-48V",     "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v3.5-48V" } },
+    { "name": "v3.6-24V",     "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v3.6-24V" } },
+    { "name": "v3.6-56V",     "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v3.6-56V" } },
+    { "name": "v4.0-56V",     "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v4.0-56V" } },
+    { "name": "v4.1-58V",     "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v4.1-58V" } },
+    { "name": "v3.6-56V-debug", "inherits": "base-firmware-debug", "cacheVariables": { "BOARD_VERSION": "v3.6-56V" } },
+
+    {
+      "name": "tests",
+      "displayName": "Unit tests (host native)",
+      "binaryDir": "${sourceDir}/build/tests",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ]
+}

@@ -1,5 +1,25 @@
-from cantools.database import *
+import cantools.database as can
+from cantools.database import dump_file, load_file
+from cantools.database import conversion as _conv
+from collections import OrderedDict as _OrderedDict
 from odrive.enums import *
+
+# Compatibility shim: cantools 37+ moved choices/is_float/scale into a conversion object
+_OrigSignal = can.Signal
+def _Signal(name, start, length, byte_order='little_endian', is_signed=False,
+            is_float=False, scale=1, offset=0, minimum=None, maximum=None,
+            unit=None, choices=None, comment=None, receivers=None, **kwargs):
+    conversion = None
+    if choices is not None:
+        conversion = _conv.NamedSignalConversion(
+            scale=scale, offset=offset,
+            choices=_OrderedDict(choices), is_float=is_float)
+    elif is_float or scale != 1 or offset != 0:
+        conversion = _conv.LinearConversion(scale=scale, offset=offset, is_float=is_float)
+    return _OrigSignal(name, start, length, byte_order=byte_order, is_signed=is_signed,
+                       conversion=conversion, minimum=minimum, maximum=maximum,
+                       unit=unit, comment=comment, receivers=receivers, **kwargs)
+can.Signal = _Signal
 
 msgList = []
 nodes = [can.Node('Master')]

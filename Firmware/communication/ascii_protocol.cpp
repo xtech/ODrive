@@ -13,7 +13,7 @@
 #include <utils.hpp>
 #include <fibre/cpp_utils.hpp>
 
-#include "autogen/type_info.hpp"
+#include <autogen/type_info.hpp>
 #include "communication/interface_can.hpp"
 
 using namespace fibre;
