@@ -15,55 +15,16 @@
 #include <can.h>
 #include <i2c.h>
 #include <usb_device.h>
-#include <main.h>
+#include <main.h> // Includes board-vX.h
 #include "cmsis_os.h"
 
 #include <arm_math.h>
 
 #include <Drivers/STM32/stm32_system.h>
 
-#if HW_VERSION_MINOR <= 3
-#define SHUNT_RESISTANCE (675e-6f)
-#else
-#define SHUNT_RESISTANCE (500e-6f)
-#endif
-
-#define AXIS_COUNT (2)
-
-// Total count of GPIOs, including encoder pins, CAN pins and a dummy GPIO0.
-// ODrive v3.4 and earlier don't have GPIOs 6, 7 and 8 but to keep the numbering
-// consistent we just leave a gap in the counting scheme.
-#define GPIO_COUNT  (17)
-
 #define CAN_FREQ (2000000UL)
 
-#if HW_VERSION_MINOR >= 5 && HW_VERSION_VOLTAGE >= 48
-#define DEFAULT_BRAKE_RESISTANCE (2.0f) // [ohm]
-#else
-#define DEFAULT_BRAKE_RESISTANCE (0.47f) // [ohm]
-#endif
 
-#define DEFAULT_ERROR_PIN 0
-#define DEFAULT_MIN_DC_VOLTAGE 8.0f
-
-#define DEFAULT_GPIO_MODES \
-    ODriveIntf::GPIO_MODE_DIGITAL, \
-    ODriveIntf::GPIO_MODE_UART_A, \
-    ODriveIntf::GPIO_MODE_UART_A, \
-    ODriveIntf::GPIO_MODE_ANALOG_IN, \
-    ODriveIntf::GPIO_MODE_ANALOG_IN, \
-    ODriveIntf::GPIO_MODE_ANALOG_IN, \
-    ODriveIntf::GPIO_MODE_DIGITAL, \
-    ODriveIntf::GPIO_MODE_DIGITAL, \
-    ODriveIntf::GPIO_MODE_DIGITAL, \
-    ODriveIntf::GPIO_MODE_ENC0, \
-    ODriveIntf::GPIO_MODE_ENC0, \
-    ODriveIntf::GPIO_MODE_DIGITAL_PULL_DOWN, \
-    ODriveIntf::GPIO_MODE_ENC1, \
-    ODriveIntf::GPIO_MODE_ENC1, \
-    ODriveIntf::GPIO_MODE_DIGITAL_PULL_DOWN, \
-    ODriveIntf::GPIO_MODE_CAN_A, \
-    ODriveIntf::GPIO_MODE_CAN_A,
 
 #define TIM_TIME_BASE TIM14
 
@@ -116,14 +77,6 @@ static const float current_meas_period = CURRENT_MEAS_PERIOD;
 // Frequency in [Hz]
 #define CURRENT_MEAS_HZ ( (float)(TIM_1_8_CLOCK_HZ) / (float)(2*TIM_1_8_PERIOD_CLOCKS*(TIM_1_8_RCR+1)) )
 static const int current_meas_hz = CURRENT_MEAS_HZ;
-
-#if HW_VERSION_VOLTAGE >= 48
-#define VBUS_S_DIVIDER_RATIO 19.0f
-#elif HW_VERSION_VOLTAGE == 24
-#define VBUS_S_DIVIDER_RATIO 11.0f
-#else
-#error "unknown board voltage"
-#endif
 
 // Linear range of the DRV8301 opamp output: 0.3V...5.7V. We set the upper limit
 // to 3.0V so that it's symmetric around the center point of 1.65V.
