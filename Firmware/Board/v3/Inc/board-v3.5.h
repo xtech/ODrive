@@ -5,18 +5,10 @@
 // Pin Defines
 #define M0_nCS_Pin GPIO_PIN_13
 #define M0_nCS_GPIO_Port GPIOC
-#define M1_nCS_Pin GPIO_PIN_14
-#define M1_nCS_GPIO_Port GPIOC
-#define M1_ENC_Z_Pin GPIO_PIN_15
-#define M1_ENC_Z_GPIO_Port GPIOC
 #define M0_IB_Pin GPIO_PIN_0
 #define M0_IB_GPIO_Port GPIOC
 #define M0_IC_Pin GPIO_PIN_1
 #define M0_IC_GPIO_Port GPIOC
-#define M1_IC_Pin GPIO_PIN_2
-#define M1_IC_GPIO_Port GPIOC
-#define M1_IB_Pin GPIO_PIN_3
-#define M1_IB_GPIO_Port GPIOC
 #define GPIO_1_Pin GPIO_PIN_0
 #define GPIO_1_GPIO_Port GPIOA
 #define GPIO_2_Pin GPIO_PIN_1
@@ -25,22 +17,14 @@
 #define GPIO_3_GPIO_Port GPIOA
 #define GPIO_4_Pin GPIO_PIN_3
 #define GPIO_4_GPIO_Port GPIOA
-#define M1_TEMP_Pin GPIO_PIN_4
-#define M1_TEMP_GPIO_Port GPIOA
 #define AUX_TEMP_Pin GPIO_PIN_5
 #define AUX_TEMP_GPIO_Port GPIOA
 #define VBUS_S_Pin GPIO_PIN_6
 #define VBUS_S_GPIO_Port GPIOA
-#define M1_AL_Pin GPIO_PIN_7
-#define M1_AL_GPIO_Port GPIOA
 #define GPIO_5_Pin GPIO_PIN_4
 #define GPIO_5_GPIO_Port GPIOC
 #define M0_TEMP_Pin GPIO_PIN_5
 #define M0_TEMP_GPIO_Port GPIOC
-#define M1_BL_Pin GPIO_PIN_0
-#define M1_BL_GPIO_Port GPIOB
-#define M1_CL_Pin GPIO_PIN_1
-#define M1_CL_GPIO_Port GPIOB
 #define GPIO_6_Pin GPIO_PIN_2
 #define GPIO_6_GPIO_Port GPIOB
 #define AUX_L_Pin GPIO_PIN_10
@@ -55,12 +39,6 @@
 #define M0_BL_GPIO_Port GPIOB
 #define M0_CL_Pin GPIO_PIN_15
 #define M0_CL_GPIO_Port GPIOB
-#define M1_AH_Pin GPIO_PIN_6
-#define M1_AH_GPIO_Port GPIOC
-#define M1_BH_Pin GPIO_PIN_7
-#define M1_BH_GPIO_Port GPIOC
-#define M1_CH_Pin GPIO_PIN_8
-#define M1_CH_GPIO_Port GPIOC
 #define M0_ENC_Z_Pin GPIO_PIN_9
 #define M0_ENC_Z_GPIO_Port GPIOC
 #define M0_AH_Pin GPIO_PIN_8
@@ -79,13 +57,8 @@
 #define M0_ENC_A_GPIO_Port GPIOB
 #define M0_ENC_B_Pin GPIO_PIN_5
 #define M0_ENC_B_GPIO_Port GPIOB
-#define M1_ENC_A_Pin GPIO_PIN_6
-#define M1_ENC_A_GPIO_Port GPIOB
-#define M1_ENC_B_Pin GPIO_PIN_7
-#define M1_ENC_B_GPIO_Port GPIOB
 
 
-#define AXIS_COUNT (2)
 #define DEFAULT_ERROR_PIN 0
 #define DEFAULT_MIN_DC_VOLTAGE 8.0f
 
@@ -95,9 +68,6 @@
 #else
 #define DEFAULT_BRAKE_RESISTANCE (0.47f)
 #endif
-#define M1_THERMISTOR_ADC_CHANNEL 4
-#define M1_STEP_GPIO_PIN 7
-#define M1_DIR_GPIO_PIN 8
 
 #define M0_THERMISTOR_ADC_CHANNEL 15
 #define M0_STEP_GPIO_PIN 1
@@ -121,8 +91,8 @@
     ODriveIntf::GPIO_MODE_ENC1, \
     ODriveIntf::GPIO_MODE_ENC1, \
     ODriveIntf::GPIO_MODE_DIGITAL_PULL_DOWN, \
-    ODriveIntf::GPIO_MODE_CAN_A, \
-    ODriveIntf::GPIO_MODE_CAN_A,
+    ODriveIntf::GPIO_MODE_DIGITAL, \
+    ODriveIntf::GPIO_MODE_DIGITAL,
 
 #if HW_VERSION_VOLTAGE >= 48
 #define VBUS_S_DIVIDER_RATIO 19.0f
@@ -156,8 +126,8 @@
     /* ENC1_A: */ {{{ODrive::GPIO_MODE_I2C_A, GPIO_AF4_I2C1}, {ODrive::GPIO_MODE_ENC1, GPIO_AF2_TIM4}}}, \
     /* ENC1_B: */ {{{ODrive::GPIO_MODE_I2C_A, GPIO_AF4_I2C1}, {ODrive::GPIO_MODE_ENC1, GPIO_AF2_TIM4}}}, \
     /* ENC1_Z: */ {{}}, \
-    /* CAN_R: */ {{{ODrive::GPIO_MODE_CAN_A, GPIO_AF9_CAN1}, {ODrive::GPIO_MODE_I2C_A, GPIO_AF4_I2C1}}}, \
-    /* CAN_D: */ {{{ODrive::GPIO_MODE_CAN_A, GPIO_AF9_CAN1}, {ODrive::GPIO_MODE_I2C_A, GPIO_AF4_I2C1}}}, \
+    /* CAN_R: */ {{{ODrive::GPIO_MODE_I2C_A, GPIO_AF4_I2C1}}}, \
+    /* CAN_D: */ {{{ODrive::GPIO_MODE_I2C_A, GPIO_AF4_I2C1}}}, \
 };
 
 // v3.5 and 3.6 use the default main.h (no extra include needed)

@@ -79,14 +79,10 @@ osThreadId analog_thread = 0;
 // @brief Arms the brake resistor
 void safety_critical_arm_brake_resistor() {
     CRITICAL_SECTION() {
-        for (size_t i = 0; i < AXIS_COUNT; ++i) {
-            axes[i].motor_.I_bus_ = 0.0f;
-        }
+        axis.motor_.I_bus_ = 0.0f;
         brake_resistor_armed = true;
-#if HW_VERSION_MAJOR == 3
         htim2.Instance->CCR3 = 0;
         htim2.Instance->CCR4 = TIM_APB1_PERIOD_CLOCKS + 1;
-#endif
     }
 }
 
@@ -99,17 +95,13 @@ void safety_critical_disarm_brake_resistor() {
 
     CRITICAL_SECTION() {
         brake_resistor_armed = false;
-#if HW_VERSION_MAJOR == 3
         htim2.Instance->CCR3 = 0;
         htim2.Instance->CCR4 = TIM_APB1_PERIOD_CLOCKS + 1;
-#endif
     }
 
     // Check necessary to prevent infinite recursion
     if (brake_resistor_was_armed) {
-        for (auto& axis: axes) {
-            axis.motor_.disarm();
-        }
+        axis.motor_.disarm();
     }
 }
 
@@ -139,25 +131,21 @@ void safety_critical_apply_brake_resistor_timings(uint32_t low_off, uint32_t hig
 
 void start_adc_pwm() {
     // Disarm motors
-    for (auto& axis: axes) {
-        axis.motor_.disarm();
-    }
+    axis.motor_.disarm();
 
-    for (Motor& motor: motors) {
-        // Init PWM
-        int half_load = TIM_1_8_PERIOD_CLOCKS / 2;
-        motor.timer_->Instance->CCR1 = half_load;
-        motor.timer_->Instance->CCR2 = half_load;
-        motor.timer_->Instance->CCR3 = half_load;
+    // Init PWM
+    int half_load = TIM_1_8_PERIOD_CLOCKS / 2;
+    motor.timer_->Instance->CCR1 = half_load;
+    motor.timer_->Instance->CCR2 = half_load;
+    motor.timer_->Instance->CCR3 = half_load;
 
-        // Enable PWM outputs (they are still masked by MOE though)
-        motor.timer_->Instance->CCER |= (TIM_CCx_ENABLE << TIM_CHANNEL_1);
-        motor.timer_->Instance->CCER |= (TIM_CCxN_ENABLE << TIM_CHANNEL_1);
-        motor.timer_->Instance->CCER |= (TIM_CCx_ENABLE << TIM_CHANNEL_2);
-        motor.timer_->Instance->CCER |= (TIM_CCxN_ENABLE << TIM_CHANNEL_2);
-        motor.timer_->Instance->CCER |= (TIM_CCx_ENABLE << TIM_CHANNEL_3);
-        motor.timer_->Instance->CCER |= (TIM_CCxN_ENABLE << TIM_CHANNEL_3);
-    }
+    // Enable PWM outputs (they are still masked by MOE though)
+    motor.timer_->Instance->CCER |= (TIM_CCx_ENABLE << TIM_CHANNEL_1);
+    motor.timer_->Instance->CCER |= (TIM_CCxN_ENABLE << TIM_CHANNEL_1);
+    motor.timer_->Instance->CCER |= (TIM_CCx_ENABLE << TIM_CHANNEL_2);
+    motor.timer_->Instance->CCER |= (TIM_CCxN_ENABLE << TIM_CHANNEL_2);
+    motor.timer_->Instance->CCER |= (TIM_CCx_ENABLE << TIM_CHANNEL_3);
+    motor.timer_->Instance->CCER |= (TIM_CCxN_ENABLE << TIM_CHANNEL_3);
 
     // Enable ADC and interrupts
     __HAL_ADC_ENABLE(&hadc1);
@@ -321,10 +309,8 @@ void vbus_sense_adc_cb(uint32_t adc_value) {
 // brake resistor PWM accordingly.
 void update_brake_current() {
     float Ibus_sum = 0.0f;
-    for (size_t i = 0; i < AXIS_COUNT; ++i) {
-        if (axes[i].motor_.is_armed_) {
-            Ibus_sum += axes[i].motor_.I_bus_;
-        }
+    if (axis.motor_.is_armed_) {
+        Ibus_sum += axis.motor_.I_bus_;
     }
 
     float brake_duty = 0.0f;

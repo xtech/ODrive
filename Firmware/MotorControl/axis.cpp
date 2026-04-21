@@ -271,8 +271,8 @@ bool Axis::start_closed_loop_control() {
             controller_.pos_estimate_circular_src_.disconnect();
             controller_.pos_wrap_src_.disconnect();
             controller_.vel_estimate_src_.connect_to(&sensorless_estimator_.vel_estimate_);
-        } else if (controller_.config_.load_encoder_axis < AXIS_COUNT) {
-            Axis* ax = &axes[controller_.config_.load_encoder_axis];
+        } else if (controller_.config_.load_encoder_axis == 0) {
+            Axis* ax = &axis;
             controller_.pos_estimate_circular_src_.connect_to(&ax->encoder_.pos_circular_);
             controller_.pos_wrap_src_.connect_to(&controller_.config_.circular_setpoint_range);
             controller_.pos_estimate_linear_src_.connect_to(&ax->encoder_.pos_estimate_);
@@ -423,10 +423,6 @@ bool Axis::run_homing() {
 
     // Set the current position to 0, the target to zero, and make sure we're path planning from 0 to 0
     encoder_.set_linear_count(0); 
-    const auto load_encoder_axis = controller_.config_.load_encoder_axis;
-    if(load_encoder_axis != axis_num_ && load_encoder_axis < AXIS_COUNT) {
-        axes[load_encoder_axis].encoder_.set_linear_count(0);
-    }
     controller_.input_pos_ = 0.0f;
     controller_.pos_setpoint_ = 0.0f;
     controller_.vel_setpoint_ = 0.0f;

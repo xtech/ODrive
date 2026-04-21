@@ -54,10 +54,6 @@ void init_communication(void) {
     if (odrv.config_.enable_i2c_a) {
         start_i2c_server();
     }
-
-    if (odrv.config_.enable_can_a) {
-        odrv.can_.start_server(&hcan1);
-    }
 }
 
 #include <fibre/async_stream.hpp>

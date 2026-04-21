@@ -71,7 +71,6 @@ struct BoardConfig_t {
     uint32_t uart_a_baudrate = 115200;
     uint32_t uart_b_baudrate = 115200;
     uint32_t uart_c_baudrate = 115200;
-    bool enable_can_a = true;
     bool enable_i2c_a = false;
     ODriveIntf::StreamProtocolType uart0_protocol = ODriveIntf::STREAM_PROTOCOL_TYPE_ASCII_AND_STDOUT;
     ODriveIntf::StreamProtocolType uart1_protocol = ODriveIntf::STREAM_PROTOCOL_TYPE_ASCII_AND_STDOUT;
@@ -153,7 +152,6 @@ inline ENUMTYPE operator ~ (ENUMTYPE a) { return static_cast<ENUMTYPE>(~static_c
 #include <axis.hpp>
 #include <oscilloscope.hpp>
 #include <communication/communication.h>
-#include <communication/can/odrive_can.hpp>
 
 // Defined in autogen/version.c based on git-derived version numbers
 extern "C" {
@@ -190,7 +188,7 @@ public:
     void sampling_cb();
     void control_loop_cb(uint32_t timestamp);
 
-    Axis& get_axis(int num) { return axes[num]; }
+    Axis& get_axis(int num) { return axis; }
 
     uint32_t get_interrupt_status(int32_t irqn);
     uint32_t get_dma_status(uint8_t stream_num);
@@ -230,7 +228,6 @@ public:
         nullptr // data_src TODO: change data type
     };
 
-    ODriveCAN can_;
 
     BoardConfig_t config_;
     uint32_t user_config_loaded_ = 0;

@@ -16,7 +16,6 @@ if(NOT CMAKE_CROSSCOMPILING)
     enable_testing()
 
     add_executable(odrive_tests
-        Tests/test_can.cpp
         Tests/test_rotate.cpp
         Tests/test_runner.cpp
         Tests/test_timer.cpp
@@ -200,165 +199,80 @@ add_custom_target(odrive_codegen
 )
 
 # ── Board-family configuration ─────────────────────────────────────────────────
-if(HW_FAMILY STREQUAL "v3")
 
-    set(BOARD_CPU_FLAGS -mcpu=cortex-m4 -mfpu=fpv4-sp-d16)
+set(BOARD_CPU_FLAGS -mcpu=cortex-m4 -mfpu=fpv4-sp-d16)
 
-    set(BOARD_COMPILE_DEFS
-        ARM_MATH_CM4
-        FPU_FPV4
-        STM32F405xx
-        HW_VERSION_MAJOR=${HW_MAJOR}
-        HW_VERSION_MINOR=${HW_MINOR}
-        HW_VERSION_VOLTAGE=${HW_VOLTAGE}
-        BOARD_CONFIG_HEADER="board-v${HW_MAJOR}.${HW_MINOR}.h"
-    )
+set(BOARD_COMPILE_DEFS
+    ARM_MATH_CM4
+    FPU_FPV4
+    STM32F405xx
+    HW_VERSION_MAJOR=${HW_MAJOR}
+    HW_VERSION_MINOR=${HW_MINOR}
+    HW_VERSION_VOLTAGE=${HW_VOLTAGE}
+    BOARD_CONFIG_HEADER="board-v${HW_MAJOR}.${HW_MINOR}.h"
+)
 
-    set(BOARD_LINKER_SCRIPT "${FW_SRC_DIR}/Board/v3/STM32F405RGTx_FLASH.ld")
-    set(BOARD_MATH_LIB arm_cortexM4lf_math)
+set(BOARD_LINKER_SCRIPT "${FW_SRC_DIR}/Board/v3/STM32F405RGTx_FLASH.ld")
+set(BOARD_MATH_LIB arm_cortexM4lf_math)
 
-    set(BOARD_INCLUDE_DIRS
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Inc"
-        "${FW_SRC_DIR}/Board/v3/Inc"
-        "${FW_SRC_DIR}/Drivers/DRV8301"
-        "${FW_SRC_DIR}/ThirdParty/FreeRTOS/Source/portable/GCC/ARM_CM4F"
-    )
+set(BOARD_INCLUDE_DIRS
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Inc"
+    "${FW_SRC_DIR}/Board/v3/Inc"
+    "${FW_SRC_DIR}/Drivers/DRV8301"
+    "${FW_SRC_DIR}/ThirdParty/FreeRTOS/Source/portable/GCC/ARM_CM4F"
+)
 
-    set(BOARD_SOURCES
-        "${FW_SRC_DIR}/Board/v3/startup_stm32f405xx.s"
-        "${FW_SRC_DIR}/Board/v3/board.cpp"
-        "${FW_SRC_DIR}/Board/v3/Src/stm32f4xx_hal_timebase_TIM.c"
-        "${FW_SRC_DIR}/Board/v3/Src/tim.c"
-        "${FW_SRC_DIR}/Board/v3/Src/dma.c"
-        "${FW_SRC_DIR}/Board/v3/Src/freertos.c"
-        "${FW_SRC_DIR}/Board/v3/Src/main.c"
-        "${FW_SRC_DIR}/Board/v3/Src/usbd_conf.c"
-        "${FW_SRC_DIR}/Board/v3/Src/spi.c"
-        "${FW_SRC_DIR}/Board/v3/Src/usart.c"
-        "${FW_SRC_DIR}/Board/v3/Src/usbd_cdc_if.c"
-        "${FW_SRC_DIR}/Board/v3/Src/adc.c"
-        "${FW_SRC_DIR}/Board/v3/Src/stm32f4xx_hal_msp.c"
-        "${FW_SRC_DIR}/Board/v3/Src/usbd_desc.c"
-        "${FW_SRC_DIR}/Board/v3/Src/stm32f4xx_it.c"
-        "${FW_SRC_DIR}/Board/v3/Src/usb_device.c"
-        "${FW_SRC_DIR}/Board/v3/Src/can.c"
-        "${FW_SRC_DIR}/Board/v3/Src/system_stm32f4xx.c"
-        "${FW_SRC_DIR}/Board/v3/Src/gpio.c"
-        "${FW_SRC_DIR}/Board/v3/Src/i2c.c"
-        "${FW_SRC_DIR}/Drivers/DRV8301/drv8301.cpp"
-        "${FW_SRC_DIR}/ThirdParty/FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c"
-        # STM32F4xx HAL
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_adc.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_adc_ex.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_can.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma_ex.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ex.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ramfunc.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_gpio.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c_ex.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd_ex.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr_ex.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc_ex.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim_ex.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c"
-        "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_usb.c"
-    )
+set(BOARD_SOURCES
+    "${FW_SRC_DIR}/Board/v3/startup_stm32f405xx.s"
+    "${FW_SRC_DIR}/Board/v3/board.cpp"
+    "${FW_SRC_DIR}/Board/v3/Src/stm32f4xx_hal_timebase_TIM.c"
+    "${FW_SRC_DIR}/Board/v3/Src/tim.c"
+    "${FW_SRC_DIR}/Board/v3/Src/dma.c"
+    "${FW_SRC_DIR}/Board/v3/Src/freertos.c"
+    "${FW_SRC_DIR}/Board/v3/Src/main.c"
+    "${FW_SRC_DIR}/Board/v3/Src/usbd_conf.c"
+    "${FW_SRC_DIR}/Board/v3/Src/spi.c"
+    "${FW_SRC_DIR}/Board/v3/Src/usart.c"
+    "${FW_SRC_DIR}/Board/v3/Src/usbd_cdc_if.c"
+    "${FW_SRC_DIR}/Board/v3/Src/adc.c"
+    "${FW_SRC_DIR}/Board/v3/Src/stm32f4xx_hal_msp.c"
+    "${FW_SRC_DIR}/Board/v3/Src/usbd_desc.c"
+    "${FW_SRC_DIR}/Board/v3/Src/stm32f4xx_it.c"
+    "${FW_SRC_DIR}/Board/v3/Src/usb_device.c"
+    "${FW_SRC_DIR}/Board/v3/Src/can.c"
+    "${FW_SRC_DIR}/Board/v3/Src/system_stm32f4xx.c"
+    "${FW_SRC_DIR}/Board/v3/Src/gpio.c"
+    "${FW_SRC_DIR}/Board/v3/Src/i2c.c"
+    "${FW_SRC_DIR}/Drivers/DRV8301/drv8301.cpp"
+    "${FW_SRC_DIR}/ThirdParty/FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c"
+    # STM32F4xx HAL
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_adc.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_adc_ex.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_can.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma_ex.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ex.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_flash_ramfunc.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_gpio.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_i2c_ex.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd_ex.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pwr_ex.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc_ex.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim_ex.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c"
+    "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_ll_usb.c"
+)
 
-else() # v4
 
-    set(BOARD_CPU_FLAGS -mcpu=cortex-m7 -mfpu=fpv5-sp-d16)
-
-    set(BOARD_COMPILE_DEFS
-        ARM_MATH_CM7
-        STM32F722xx
-        HW_VERSION_MAJOR=${HW_MAJOR}
-        HW_VERSION_MINOR=${HW_MINOR}
-        HW_VERSION_VOLTAGE=${HW_VOLTAGE}
-        BOARD_CONFIG_HEADER="board-v${HW_MAJOR}.${HW_MINOR}.h"
-    )
-
-    set(BOARD_LINKER_SCRIPT "${FW_SRC_DIR}/Private/v4/STM32F722RETx_FLASH.ld")
-    set(BOARD_MATH_LIB arm_cortexM7lfsp_math)
-
-    set(BOARD_INCLUDE_DIRS
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Inc"
-        "${FW_SRC_DIR}/Private/v4/Inc"
-        "${FW_SRC_DIR}/Private/v4"
-        "${FW_SRC_DIR}/Private"
-        "${FW_SRC_DIR}/Private/ThirdParty/sha-2"
-        "${FW_SRC_DIR}/Private/ThirdParty/rsa_embedded"
-        "${FW_SRC_DIR}/Drivers/DRV8353"
-        "${FW_SRC_DIR}/ThirdParty/FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1"
-    )
-
-    set(BOARD_SOURCES
-        "${FW_SRC_DIR}/Private/v4/startup_stm32f722xx.s"
-        "${FW_SRC_DIR}/Private/v4/board.cpp"
-        "${FW_SRC_DIR}/Private/v4/Src/main.c"
-        "${FW_SRC_DIR}/Private/v4/Src/gpio.c"
-        "${FW_SRC_DIR}/Private/v4/Src/adc.c"
-        "${FW_SRC_DIR}/Private/v4/Src/can.c"
-        "${FW_SRC_DIR}/Private/v4/Src/dma.c"
-        "${FW_SRC_DIR}/Private/v4/Src/freertos.c"
-        "${FW_SRC_DIR}/Private/v4/Src/spi.c"
-        "${FW_SRC_DIR}/Private/v4/Src/tim.c"
-        "${FW_SRC_DIR}/Private/v4/Src/stm32f7xx_it.c"
-        "${FW_SRC_DIR}/Private/v4/Src/stm32f7xx_hal_msp.c"
-        "${FW_SRC_DIR}/Private/v4/Src/stm32f7xx_hal_timebase_tim.c"
-        "${FW_SRC_DIR}/Private/v4/Src/system_stm32f7xx.c"
-        "${FW_SRC_DIR}/Private/v4/Src/i2s.c"
-        "${FW_SRC_DIR}/Private/v4/Src/usart.c"
-        "${FW_SRC_DIR}/Private/v4/Src/usb_device.c"
-        "${FW_SRC_DIR}/Private/v4/Src/usbd_conf.c"
-        "${FW_SRC_DIR}/Private/v4/Src/usbd_desc.c"
-        "${FW_SRC_DIR}/Private/v4/Src/usbd_cdc_if.c"
-        "${FW_SRC_DIR}/Private/v4/Src/i2c.c"
-        "${FW_SRC_DIR}/Private/Drivers/DRV8353/drv8353.cpp"
-        "${FW_SRC_DIR}/Private/Drivers/status_led.cpp"
-        "${FW_SRC_DIR}/ThirdParty/FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1/port.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/sha-2/sha-256.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/rsa_embedded/rsa.c"
-        # STM32F7xx HAL
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_adc.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_adc_ex.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_can.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_cortex.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_dma.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_dma_ex.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_exti.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_flash.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_flash_ex.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_gpio.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_i2c.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_i2c_ex.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_i2s.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_pcd.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_pcd_ex.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_pwr.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_pwr_ex.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_rcc.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_rcc_ex.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_spi.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_spi_ex.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_tim.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_tim_ex.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_uart.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_hal_uart_ex.c"
-        "${FW_SRC_DIR}/Private/ThirdParty/STM32F7xx_HAL_Driver/Src/stm32f7xx_ll_usb.c"
-    )
-
-endif()
 
 # ── Fibre library sources ──────────────────────────────────────────────────────
 # Configured with: enable_server=true, enable_client=false, allow_heap=false,
@@ -409,8 +323,6 @@ set(COMMON_SOURCES
     "${FW_SRC_DIR}/Drivers/STM32/stm32_gpio.cpp"
     "${FW_SRC_DIR}/Drivers/STM32/stm32_nvm.c"
     "${FW_SRC_DIR}/Drivers/STM32/stm32_spi_arbiter.cpp"
-    "${FW_SRC_DIR}/communication/can/can_simple.cpp"
-    "${FW_SRC_DIR}/communication/can/odrive_can.cpp"
     "${FW_SRC_DIR}/communication/communication.cpp"
     "${FW_SRC_DIR}/communication/ascii_protocol.cpp"
     "${FW_SRC_DIR}/communication/interface_uart.cpp"
