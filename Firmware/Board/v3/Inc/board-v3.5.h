@@ -1,7 +1,7 @@
 #ifndef __BOARD_CONFIG_V3_5_H
 #define __BOARD_CONFIG_V3_5_H
 
-
+#define AXIS_COUNT 1
 // Pin Defines
 // GPIOs
 // GPIO1 == MISO_EXT
@@ -116,23 +116,23 @@
 
 
 #define BOARD_GPIOS { \
-    {}, \
+    {nullptr, 0}, \
     {GPIO_1_GPIO_Port, GPIO_1_Pin},\
     {GPIO_2_GPIO_Port, GPIO_2_Pin},\
     {GPIO_3_GPIO_Port, GPIO_3_Pin},\
-    {}, \
-    {}, \
-    {}, \
-    {}, \
-    {}, \
-    {}, \
-    {}, \
-    {}, \
-    {}, \
-    {}, \
-    {}, \
-    {}, \
-    {} \
+    {nullptr, 0}, \
+    {nullptr, 0}, \
+    {nullptr, 0}, \
+    {nullptr, 0}, \
+    {nullptr, 0}, \
+    {nullptr, 0}, \
+    {nullptr, 0}, \
+    {nullptr, 0}, \
+    {nullptr, 0}, \
+    {nullptr, 0}, \
+    {nullptr, 0}, \
+    {nullptr, 0}, \
+    {nullptr, 0} \
 }
 
 #define BOARD_ALTERANATE_FUNCTIONS { \

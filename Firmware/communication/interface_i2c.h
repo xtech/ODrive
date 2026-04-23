@@ -14,7 +14,7 @@ struct I2CStats_t {
     uint32_t error_cnt;
 };
 
-extern I2CStats_t i2c_stats_;
+// extern I2CStats_t i2c_stats_;
 
 void start_i2c_server(void);
 

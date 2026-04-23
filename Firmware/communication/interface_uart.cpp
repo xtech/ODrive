@@ -119,9 +119,6 @@ bool uart0_stdout_pending = false;
 static void uart_server_thread(void * ctx) {
     (void) ctx;
 
-    while (1) {
-        osDelay(10000);
-    }
     if (odrv.config_.uart0_protocol == ODrive::STREAM_PROTOCOL_TYPE_FIBRE) {
         fibre_over_uart.start({});
     } else if (odrv.config_.uart0_protocol == ODrive::STREAM_PROTOCOL_TYPE_ASCII
@@ -182,7 +179,6 @@ static void uart_server_thread(void * ctx) {
 
 // TODO: allow multiple UART server instances
 void start_uart_server(UART_HandleTypeDef* huart) {
-    return;
     huart_ = huart;
     uart_tx_stream.huart_ = huart;
 

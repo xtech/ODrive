@@ -50,10 +50,10 @@ using TOpAmp = Drv8376;
 #include <MotorControl/motor.hpp>
 #include <MotorControl/encoder.hpp>
 
-extern Axis axis;
-extern Motor motor;
-extern OnboardThermistorCurrentLimiter fet_thermistor;
-extern Encoder encoder;
+extern std::array<Axis, AXIS_COUNT> axes;
+extern Motor motors[AXIS_COUNT];
+extern OnboardThermistorCurrentLimiter fet_thermistors[AXIS_COUNT];
+extern Encoder encoders[AXIS_COUNT];
 extern Stm32Gpio gpios[GPIO_COUNT];
 
 struct GpioFunction { int mode = 0; uint8_t alternate_function = 0xff; };

@@ -81,6 +81,9 @@ bool Drv8376::init() {
         delay_us(10000);
     }
     nsleep_gpio_.write(true);
+    for (int i = 0; i < 10; i++) {
+        delay_us(10000);
+    }
 
     ncs_gpio_.config(GPIO_MODE_OUTPUT_PP, GPIO_NOPULL, GPIO_SPEED_FREQ_VERY_HIGH);
     miso_gpio_.config(GPIO_MODE_INPUT, GPIO_NOPULL, GPIO_SPEED_FREQ_VERY_HIGH);
@@ -93,13 +96,18 @@ bool Drv8376::init() {
     ncs_gpio_.write(true);
     mosi_gpio_.write(true);
 
+    // wait for fault to go away
+    while (!nfault_gpio_.read()) {
+        delay_us(1000);
+    }
+
     state_ = kStateReady;
     return is_ready();
 }
 
 void Drv8376::do_checks() {
      if (state_ != kStateUninitialized && !nfault_gpio_.read()) {
-         state_ = kStateUninitialized;
+         //state_ = kStateUninitialized;
     }
 }
 

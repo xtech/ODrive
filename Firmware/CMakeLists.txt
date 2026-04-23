@@ -275,7 +275,7 @@ set(COMMON_SOURCES
     "${FW_SRC_DIR}/communication/ascii_protocol.cpp"
 #    "${FW_SRC_DIR}/communication/interface_uart.cpp"
     "${FW_SRC_DIR}/communication/interface_usb.cpp"
-    "${FW_SRC_DIR}/communication/interface_i2c.cpp"
+#    "${FW_SRC_DIR}/communication/interface_i2c.cpp"
     # FreeRTOS kernel
     "${FW_SRC_DIR}/ThirdParty/FreeRTOS/Source/croutine.c"
     "${FW_SRC_DIR}/ThirdParty/FreeRTOS/Source/event_groups.c"

@@ -159,13 +159,6 @@ interfaces:
               rx_cnt: readonly uint32
               tx_cnt: readonly uint32
               tx_overrun_cnt: readonly uint32
-          i2c:
-            c_is_class: False
-            attributes:
-              addr: readonly uint8
-              addr_match_cnt: readonly uint32
-              rx_cnt: readonly uint32
-              error_cnt: readonly uint32
       user_config_loaded: readonly uint32
       misconfigured:
         # TODO: make this a system error

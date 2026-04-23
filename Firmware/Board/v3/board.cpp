@@ -51,57 +51,65 @@ const float fet_thermistor_poly_coeffs[] =
     {363.93910201f, -462.15369634f, 307.55129571f, -27.72569531f};
 const size_t fet_thermistor_num_coeffs = sizeof(fet_thermistor_poly_coeffs)/sizeof(fet_thermistor_poly_coeffs[1]);
 
-OnboardThermistorCurrentLimiter fet_thermistor = {
+OnboardThermistorCurrentLimiter fet_thermistors[AXIS_COUNT] = {
+    {
         M0_THERMISTOR_ADC_CHANNEL, // adc_channel
         &fet_thermistor_poly_coeffs[0], // coefficients
         fet_thermistor_num_coeffs // num_coeffs
+}
 };
 
-OffboardThermistorCurrentLimiter motor_thermistor{};
+OffboardThermistorCurrentLimiter motor_thermistors[AXIS_COUNT];
 
-Motor motor = {
+Motor motors[AXIS_COUNT] = {
+    {
         &htim1, // timer
         0b110, // current_sensor_mask
         1.0f / SHUNT_RESISTANCE, // shunt_conductance [S]
         m0_gate_driver, // gate_driver
         m0_gate_driver, // opamp
-        fet_thermistor,
-        motor_thermistor
+        fet_thermistors[0],
+        motor_thermistors[0]
+}
 };
 
-Encoder encoder =
+Encoder encoders[AXIS_COUNT] =
     {
-        &htim3, // timer
-        {M0_ENC_Z_GPIO_Port, M0_ENC_Z_Pin}, // index_gpio
-        {M0_ENC_A_GPIO_Port, M0_ENC_A_Pin}, // hallA_gpio
-        {M0_ENC_B_GPIO_Port, M0_ENC_B_Pin}, // hallB_gpio
-        {M0_ENC_Z_GPIO_Port, M0_ENC_Z_Pin}, // hallC_gpio
-        &spi3_arbiter // spi_arbiter
+        {
+            &htim3, // timer
+            {M0_ENC_Z_GPIO_Port, M0_ENC_Z_Pin}, // index_gpio
+            {M0_ENC_A_GPIO_Port, M0_ENC_A_Pin}, // hallA_gpio
+            {M0_ENC_B_GPIO_Port, M0_ENC_B_Pin}, // hallB_gpio
+            {M0_ENC_Z_GPIO_Port, M0_ENC_Z_Pin}, // hallC_gpio
+            &spi3_arbiter // spi_arbiter
+        }
     };
 
 
 // TODO: this has no hardware dependency and should be allocated depending on config
-Endstop endstops[2];
-MechanicalBrake mechanical_brake;
+Endstop endstops[2 * AXIS_COUNT];
+MechanicalBrake mechanical_brakes[AXIS_COUNT];
 
-SensorlessEstimator sensorless_estimator;
-Controller controller;
-TrapezoidalTrajectory trap;
+SensorlessEstimator sensorless_estimators[AXIS_COUNT];
+Controller controllers[AXIS_COUNT];
+TrapezoidalTrajectory trap[AXIS_COUNT];
 
-Axis axis
+std::array<Axis, AXIS_COUNT> axes{{
     {
         0, // axis_num
         M0_STEP_GPIO_PIN, // step_gpio_pin
         M0_DIR_GPIO_PIN, // dir_gpio_pin
         (osPriority)(osPriorityHigh + (osPriority)1), // thread_priority
-        encoder, // encoder
-        sensorless_estimator, // sensorless_estimator
-        controller, // controller
-        motor, // motor
-        trap, // trap
+        encoders[0], // encoder
+        sensorless_estimators[0], // sensorless_estimator
+        controllers[0], // controller
+        motors[0], // motor
+        trap[0], // trap
         endstops[0], endstops[1], // min_endstop, max_endstop
-        mechanical_brake, // mechanical brake
-    };
+        mechanical_brakes[0], // mechanical brake
+    },
+}};
+
 
 
 
@@ -149,6 +157,7 @@ bool board_init() {
     MX_TIM1_Init();
     MX_TIM8_Init();
     MX_TIM3_Init();
+    MX_TIM4_Init();
     MX_SPI3_Init();
     MX_ADC3_Init();
     MX_TIM2_Init();
@@ -262,8 +271,8 @@ static bool fetch_and_reset_adcs(
     vbus_sense_adc_cb(ADC1->JDR1);
 
     if (m0_gate_driver.is_ready()) {
-        std::optional<float> phB = motor.phase_current_from_adcval(ADC2->JDR1);
-        std::optional<float> phC = motor.phase_current_from_adcval(ADC3->JDR1);
+        std::optional<float> phB = motors[0].phase_current_from_adcval(ADC2->JDR1);
+        std::optional<float> phC = motors[0].phase_current_from_adcval(ADC3->JDR1);
         if (phB.has_value() && phC.has_value()) {
             *current0 = {-*phB - *phC, *phB, *phC};
         }
@@ -314,7 +323,8 @@ void TIM8_UP_TIM13_IRQHandler(void) {
 
     bool timer_update_missed = (counting_down_ == counting_down);
     if (timer_update_missed) {
-        motor.disarm_with_error(Motor::ERROR_TIMER_UPDATE_MISSED);
+        motors[0].disarm_with_error(Motor::ERROR_TIMER_UPDATE_MISSED);
+        motors[1].disarm_with_error(Motor::ERROR_TIMER_UPDATE_MISSED);
         return;
     }
     counting_down_ = counting_down;
@@ -350,7 +360,8 @@ void ControlLoop_IRQHandler(void) {
     std::optional<Iph_ABC_t> current1;
 
     if (!fetch_and_reset_adcs(&current0, &current1)) {
-        motor.disarm_with_error(Motor::ERROR_BAD_TIMING);
+        motors[0].disarm_with_error(Motor::ERROR_BAD_TIMING);
+        motors[1].disarm_with_error(Motor::ERROR_BAD_TIMING);
     }
 
     // If the motor FETs are not switching then we can't measure the current
@@ -365,7 +376,8 @@ void ControlLoop_IRQHandler(void) {
         current1 = {0.0f, 0.0f};
     }
 
-    motor.current_meas_cb(timestamp - TIM1_INIT_COUNT, current0);
+    motors[0].current_meas_cb(timestamp - TIM1_INIT_COUNT, current0);
+    motors[1].current_meas_cb(timestamp, current1);
 
     odrv.control_loop_cb(timestamp);
 
@@ -376,18 +388,22 @@ void ControlLoop_IRQHandler(void) {
     }
 
     if (!fetch_and_reset_adcs(&current0, &current1)) {
-        motor.disarm_with_error(Motor::ERROR_BAD_TIMING);
+        motors[0].disarm_with_error(Motor::ERROR_BAD_TIMING);
+        motors[1].disarm_with_error(Motor::ERROR_BAD_TIMING);
     }
 
-    motor.dc_calib_cb(timestamp + TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1) - TIM1_INIT_COUNT, current0);
+    motors[0].dc_calib_cb(timestamp + TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1) - TIM1_INIT_COUNT, current0);
+    motors[1].dc_calib_cb(timestamp + TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1), current1);
 
-    motor.pwm_update_cb(timestamp + 3 * TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1) - TIM1_INIT_COUNT);
+    motors[0].pwm_update_cb(timestamp + 3 * TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1) - TIM1_INIT_COUNT);
+    motors[1].pwm_update_cb(timestamp + 3 * TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1));
 
     // If we did everything right, the TIM8 update handler should have been
     // called exactly once between the start of this function and now.
 
     if (timestamp_ != timestamp + TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1)) {
-        motor.disarm_with_error(Motor::ERROR_CONTROL_DEADLINE_MISSED);
+        motors[0].disarm_with_error(Motor::ERROR_CONTROL_DEADLINE_MISSED);
+        motors[1].disarm_with_error(Motor::ERROR_CONTROL_DEADLINE_MISSED);
     }
 
     odrv.task_timers_armed_ = odrv.task_timers_armed_ && !TaskTimer::enabled;

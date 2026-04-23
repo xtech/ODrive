@@ -77,7 +77,7 @@
 /* USER CODE BEGIN Variables */
 /* USER CODE END Variables */
 osThreadId defaultTaskHandle;
-const uint32_t stack_size_default_task = 2048*2; // Bytes
+const uint32_t stack_size_default_task = 2048; // Bytes
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */

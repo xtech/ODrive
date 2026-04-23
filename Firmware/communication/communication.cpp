@@ -4,9 +4,9 @@
 #include "communication.h"
 
 #include "interface_usb.h"
-#include "interface_uart.h"
-#include "interface_can.hpp"
-#include "interface_i2c.h"
+// #include "interface_uart.h"
+// #include "interface_can.hpp"
+// #include "interface_i2c.h"
 
 #include "odrive_main.h"
 #include "freertos_vars.h"
