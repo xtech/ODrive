@@ -25,7 +25,7 @@
 /* Global constant data ------------------------------------------------------*/
 constexpr float adc_full_scale = static_cast<float>(1UL << 12UL);
 constexpr float adc_ref_voltage = 3.3f;
-const uint32_t stack_size_analog_thread = 1024;  // Bytes
+const uint32_t stack_size_analog_thread = 1024*2;  // Bytes
 /* Global variables ----------------------------------------------------------*/
 
 // This value is updated by the DC-bus reading ADC.

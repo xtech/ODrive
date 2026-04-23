@@ -36,11 +36,14 @@ UART_HandleTypeDef* uart_a = &huart4;
 UART_HandleTypeDef* uart_b = &huart2; // TODO: this could be supported in ODrive v3.6 (or similar) using STM32's USART2
 UART_HandleTypeDef* uart_c = nullptr;
 
-Drv8301 m0_gate_driver{
-    &spi3_arbiter,
+Drv8376 m0_gate_driver{
     {M0_nCS_GPIO_Port, M0_nCS_Pin}, // nCS
-    {}, // EN pin (shared between both motors, therefore we actuate it outside of the drv8301 driver)
-    {nFAULT_GPIO_Port, nFAULT_Pin} // nFAULT pin (shared between both motors)
+    {M0_nSLEEP_GPIO_Port, M0_nSLEEP_Pin},
+    {nFAULT_GPIO_Port, nFAULT_Pin},
+    {M0_DRV_MISO_GPIO_Port, M0_DRV_MISO_Pin},
+    {M0_DRV_MOSI_GPIO_Port, M0_DRV_MOSI_Pin},
+    {M0_DRV_SCK_GPIO_Port, M0_DRV_SCK_Pin},
+    {M0_ILIM_GPIO_Port, M0_ILIM_Pin}
 };
 
 
@@ -144,6 +147,7 @@ bool board_init() {
     MX_ADC1_Init();
     MX_ADC2_Init();
     MX_TIM1_Init();
+    MX_TIM8_Init();
     MX_TIM3_Init();
     MX_SPI3_Init();
     MX_ADC3_Init();
@@ -173,7 +177,7 @@ bool board_init() {
     HAL_NVIC_SetPriority(TIM8_UP_TIM13_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(TIM8_UP_TIM13_IRQn);
 
-    if (odrv.config_.enable_uart_a) {
+    /*if (odrv.config_.enable_uart_a) {
         uart_a->Init.BaudRate = odrv.config_.uart_a_baudrate;
         MX_UART4_Init();
     }
@@ -195,7 +199,7 @@ bool board_init() {
         i2c_stats_.addr |= get_gpio(4).read() ? 0x2 : 0;
         i2c_stats_.addr |= get_gpio(5).read() ? 0x4 : 0;
         MX_I2C1_Init(i2c_stats_.addr);
-    }
+    }*/
 
 
     // Ensure that debug halting of the core doesn't leave the motor PWM running
@@ -203,14 +207,6 @@ bool board_init() {
     __HAL_DBGMCU_FREEZE_TIM8();
     __HAL_DBGMCU_FREEZE_TIM13();
 
-    Stm32Gpio drv_enable_gpio = {EN_GATE_GPIO_Port, EN_GATE_Pin};
-
-    // Reset both DRV chips. The enable pin also controls the SPI interface, not
-    // only the driver stages.
-    drv_enable_gpio.write(false);
-    delay_us(40); // mimumum pull-down time for full reset: 20us
-    drv_enable_gpio.write(true);
-    delay_us(20000); // mimumum pull-down time for full reset: 20us
 
     return true;
 }
@@ -230,8 +226,8 @@ void start_timers() {
         *  2. Each TIM13 reload coincides with a TIM1 lower update event.
         */
         Stm32Timer::start_synchronously<3>(
-            {&htim1, &htim13},
-            {TIM1_INIT_COUNT, TIM1_INIT_COUNT / 2 /* TIM13 is on a clock that's only have as fast as TIM1 */}
+            {&htim1, &htim8, &htim13},
+            {TIM1_INIT_COUNT, 0, TIM1_INIT_COUNT / 2 /* TIM13 is on a clock that's only have as fast as TIM1 */}
         );
 
         hadc1.Instance->CR2 |= (ADC_EXTERNALTRIGINJECCONVEDGE_RISING);
@@ -247,6 +243,9 @@ void start_timers() {
         __HAL_ADC_CLEAR_FLAG(&hadc1, ADC_FLAG_OVR);
         __HAL_ADC_CLEAR_FLAG(&hadc2, ADC_FLAG_OVR);
         __HAL_ADC_CLEAR_FLAG(&hadc3, ADC_FLAG_OVR);
+
+        __HAL_TIM_CLEAR_IT(&htim8, TIM_IT_UPDATE);
+        __HAL_TIM_ENABLE_IT(&htim8, TIM_IT_UPDATE);
     }
 }
 
@@ -315,7 +314,6 @@ void TIM8_UP_TIM13_IRQHandler(void) {
 
     bool timer_update_missed = (counting_down_ == counting_down);
     if (timer_update_missed) {
-        motor.disarm_with_error(Motor::ERROR_TIMER_UPDATE_MISSED);
         motor.disarm_with_error(Motor::ERROR_TIMER_UPDATE_MISSED);
         return;
     }

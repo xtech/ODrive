@@ -38,14 +38,14 @@
 #define MAX_CONTROL_LOOP_UPDATE_TO_CURRENT_UPDATE_DELTA (TIM_1_8_PERIOD_CLOCKS / 2 + 1 * 128)
 
 #ifdef __cplusplus
-#include <Drivers/DRV8301/drv8301.hpp>
+#include <Drivers/DRV8376/drv8376.hpp>
 #include <Drivers/STM32/stm32_gpio.hpp>
 #include <Drivers/STM32/stm32_spi_arbiter.hpp>
 #include <MotorControl/pwm_input.hpp>
 #include <MotorControl/thermistor.hpp>
 
-using TGateDriver = Drv8301;
-using TOpAmp = Drv8301;
+using TGateDriver = Drv8376;
+using TOpAmp = Drv8376;
 
 #include <MotorControl/motor.hpp>
 #include <MotorControl/encoder.hpp>

@@ -1,5 +1,5 @@
-#ifndef __DRV8301_HPP
-#define __DRV8301_HPP
+#ifndef __DRV8376_HPP
+#define __DRV8376_HPP
 
 #include "stdbool.h"
 #include "stdint.h"
@@ -9,7 +9,8 @@
 #include <Drivers/STM32/stm32_gpio.hpp>
 
 
-class Drv8301 : public GateDriverBase, public OpAmpBase {
+
+class Drv8376 : public GateDriverBase, public OpAmpBase {
 public:
     typedef enum : uint32_t {
         FaultType_NoFault  = (0 << 0),  //!< No fault
@@ -24,17 +25,19 @@ public:
         FaultType_OTW      = (1 << 6),  //!< Over Temperature Warning fault
         FaultType_OTSD     = (1 << 7),  //!< Over Temperature Shut Down fault
         FaultType_PVDD_UV  = (1 << 8),  //!< Power supply Vdd Under Voltage fault
-        FaultType_GVDD_UV  = (1 << 9),  //!< DRV8301 Vdd Under Voltage fault
+        FaultType_GVDD_UV  = (1 << 9),  //!< DRV8376 Vdd Under Voltage fault
         FaultType_FAULT    = (1 << 10),
 
         // Status Register 2
-        FaultType_GVDD_OV  = (1 << 23)  //!< DRV8301 Vdd Over Voltage fault
+        FaultType_GVDD_OV  = (1 << 23)  //!< DRV8376 Vdd Over Voltage fault
     } FaultType_e;
 
-    Drv8301(Stm32SpiArbiter* spi_arbiter, Stm32Gpio ncs_gpio,
-            Stm32Gpio enable_gpio, Stm32Gpio nfault_gpio)
-            : spi_arbiter_(spi_arbiter), ncs_gpio_(ncs_gpio),
-              enable_gpio_(enable_gpio), nfault_gpio_(nfault_gpio) {}
+    Drv8376(Stm32Gpio ncs_gpio,
+            Stm32Gpio nsleep_gpio, Stm32Gpio nfault_gpio,
+            Stm32Gpio miso_gpio, Stm32Gpio mosi_gpio, Stm32Gpio sclk_gpio, Stm32Gpio ilim_gpio)
+            : ncs_gpio_(ncs_gpio),
+              nsleep_gpio_(nsleep_gpio), nfault_gpio_(nfault_gpio),
+              miso_gpio_(miso_gpio), mosi_gpio_(mosi_gpio), sclk_gpio_(sclk_gpio), ilim_gpio_(ilim_gpio) {}
 
     /**
      * @brief Prepares the gate driver's configuration.
@@ -67,7 +70,7 @@ public:
     void do_checks();
 
     /**
-     * @brief Returns true if and only if the DRV8301 chip is in an initialized
+     * @brief Returns true if and only if the DRV8376 chip is in an initialized
      * state and ready to do switching and current sensor opamp operation.
      */
     bool is_ready() final;
@@ -80,55 +83,15 @@ public:
 
     FaultType_e get_error();
 
-    float get_midpoint() final {
-        return 0.5f; // [V]
-    }
-
-    float get_max_output_swing() final {
-        return 1.35f / 1.65f; // +-1.35V, normalized from a scale of +-1.65V to +-0.5
-    }
-
 private:
-    enum CtrlMode_e {
-        DRV8301_CtrlMode_Read = 1 << 15,   //!< Read Mode
-        DRV8301_CtrlMode_Write = 0 << 15   //!< Write Mode
-    };
-
-    enum RegName_e {
-        kRegNameStatus1  = 0 << 11,  //!< Status Register 1
-        kRegNameStatus2  = 1 << 11,  //!< Status Register 2
-        kRegNameControl1 = 2 << 11,  //!< Control Register 1
-        kRegNameControl2 = 3 << 11   //!< Control Register 2
-    };
-
-    struct RegisterFile {
-        uint16_t control_register_1;
-        uint16_t control_register_2;
-    };
-
-    static inline uint16_t build_ctrl_word(const CtrlMode_e ctrlMode,
-                                           const RegName_e regName,
-                                           const uint16_t data) {
-        return ctrlMode | regName | (data & 0x07FF);
-    }
-
-    /** @brief Reads data from a DRV8301 register */
-    bool read_reg(const RegName_e regName, uint16_t* data);
-
-    /** @brief Writes data to a DRV8301 register. There is no check if the write succeeded. */
-    bool write_reg(const RegName_e regName, const uint16_t data);
-
-    static const SPI_InitTypeDef spi_config_;
-
     // Configuration
-    Stm32SpiArbiter* spi_arbiter_;
     Stm32Gpio ncs_gpio_;
-    Stm32Gpio enable_gpio_;
+    Stm32Gpio nsleep_gpio_;
     Stm32Gpio nfault_gpio_;
-
-    RegisterFile regs_; //!< Current configuration. If is_ready_ is
-                        //!< true then this can be considered consistent
-                        //!< with the actual file on the DRV8301 chip.
+    Stm32Gpio miso_gpio_;
+    Stm32Gpio mosi_gpio_;
+    Stm32Gpio sclk_gpio_;
+    Stm32Gpio ilim_gpio_;
 
     // We don't put these buffers on the stack because we place the stack in
     // a RAM section which cannot be used by DMA.
@@ -142,4 +105,4 @@ private:
 };
 
 
-#endif // __DRV8301_HPP
+#endif // __DRV8376_HPP

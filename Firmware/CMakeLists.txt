@@ -28,7 +28,7 @@ if(NOT CMAKE_CROSSCOMPILING)
         "${FW_SRC_DIR}"
         "${FW_SRC_DIR}/MotorControl"
         "${FW_SRC_DIR}/fibre-cpp/include"
-        "${FW_SRC_DIR}/Drivers/DRV8301"
+        "${FW_SRC_DIR}/Drivers/DRV8376"
         "${FW_SRC_DIR}/doctest"
     )
 
@@ -56,61 +56,10 @@ option(STRICT  "Treat warnings as errors (-Werror)"         OFF)
 option(NO_DRM  "Disable DRM (-DNO_DRM)"                     OFF)
 
 # ── Decode board variant ───────────────────────────────────────────────────────
-if(BOARD_VERSION STREQUAL "v3.1")
-    set(HW_MAJOR 3)
-    set(HW_MINOR 1)
-    set(HW_VOLTAGE 24)
-    set(HW_FAMILY "v3")
-elseif(BOARD_VERSION STREQUAL "v3.2")
-    set(HW_MAJOR 3)
-    set(HW_MINOR 2)
-    set(HW_VOLTAGE 24)
-    set(HW_FAMILY "v3")
-elseif(BOARD_VERSION STREQUAL "v3.3")
-    set(HW_MAJOR 3)
-    set(HW_MINOR 3)
-    set(HW_VOLTAGE 24)
-    set(HW_FAMILY "v3")
-elseif(BOARD_VERSION STREQUAL "v3.4-24V")
-    set(HW_MAJOR 3)
-    set(HW_MINOR 4)
-    set(HW_VOLTAGE 24)
-    set(HW_FAMILY "v3")
-elseif(BOARD_VERSION STREQUAL "v3.4-48V")
-    set(HW_MAJOR 3)
-    set(HW_MINOR 4)
-    set(HW_VOLTAGE 48)
-    set(HW_FAMILY "v3")
-elseif(BOARD_VERSION STREQUAL "v3.5-24V")
+if(BOARD_VERSION STREQUAL "v3.5-24V")
     set(HW_MAJOR 3)
     set(HW_MINOR 5)
-    set(HW_VOLTAGE 24)
     set(HW_FAMILY "v3")
-elseif(BOARD_VERSION STREQUAL "v3.5-48V")
-    set(HW_MAJOR 3)
-    set(HW_MINOR 5)
-    set(HW_VOLTAGE 48)
-    set(HW_FAMILY "v3")
-elseif(BOARD_VERSION STREQUAL "v3.6-24V")
-    set(HW_MAJOR 3)
-    set(HW_MINOR 6)
-    set(HW_VOLTAGE 24)
-    set(HW_FAMILY "v3")
-elseif(BOARD_VERSION STREQUAL "v3.6-56V")
-    set(HW_MAJOR 3)
-    set(HW_MINOR 6)
-    set(HW_VOLTAGE 56)
-    set(HW_FAMILY "v3")
-elseif(BOARD_VERSION STREQUAL "v4.0-56V")
-    set(HW_MAJOR 4)
-    set(HW_MINOR 0)
-    set(HW_VOLTAGE 56)
-    set(HW_FAMILY "v4")
-elseif(BOARD_VERSION STREQUAL "v4.1-58V")
-    set(HW_MAJOR 4)
-    set(HW_MINOR 1)
-    set(HW_VOLTAGE 58)
-    set(HW_FAMILY "v4")
 else()
     message(FATAL_ERROR "Unknown BOARD_VERSION: '${BOARD_VERSION}'")
 endif()
@@ -208,7 +157,6 @@ set(BOARD_COMPILE_DEFS
     STM32F405xx
     HW_VERSION_MAJOR=${HW_MAJOR}
     HW_VERSION_MINOR=${HW_MINOR}
-    HW_VERSION_VOLTAGE=${HW_VOLTAGE}
     BOARD_CONFIG_HEADER="board-v${HW_MAJOR}.${HW_MINOR}.h"
 )
 
@@ -218,7 +166,7 @@ set(BOARD_MATH_LIB arm_cortexM4lf_math)
 set(BOARD_INCLUDE_DIRS
     "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Inc"
     "${FW_SRC_DIR}/Board/v3/Inc"
-    "${FW_SRC_DIR}/Drivers/DRV8301"
+    "${FW_SRC_DIR}/Drivers/DRV8376"
     "${FW_SRC_DIR}/ThirdParty/FreeRTOS/Source/portable/GCC/ARM_CM4F"
 )
 
@@ -243,7 +191,7 @@ set(BOARD_SOURCES
     "${FW_SRC_DIR}/Board/v3/Src/system_stm32f4xx.c"
     "${FW_SRC_DIR}/Board/v3/Src/gpio.c"
     "${FW_SRC_DIR}/Board/v3/Src/i2c.c"
-    "${FW_SRC_DIR}/Drivers/DRV8301/drv8301.cpp"
+    "${FW_SRC_DIR}/Drivers/DRV8376/drv8376.cpp"
     "${FW_SRC_DIR}/ThirdParty/FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c"
     # STM32F4xx HAL
     "${FW_SRC_DIR}/ThirdParty/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c"
@@ -325,7 +273,7 @@ set(COMMON_SOURCES
     "${FW_SRC_DIR}/Drivers/STM32/stm32_spi_arbiter.cpp"
     "${FW_SRC_DIR}/communication/communication.cpp"
     "${FW_SRC_DIR}/communication/ascii_protocol.cpp"
-    "${FW_SRC_DIR}/communication/interface_uart.cpp"
+#    "${FW_SRC_DIR}/communication/interface_uart.cpp"
     "${FW_SRC_DIR}/communication/interface_usb.cpp"
     "${FW_SRC_DIR}/communication/interface_i2c.cpp"
     # FreeRTOS kernel

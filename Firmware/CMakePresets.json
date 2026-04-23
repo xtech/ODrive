@@ -17,13 +17,12 @@
       "hidden": true,
       "inherits": "base-firmware",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "DEBUG": "ON"
+        "CMAKE_BUILD_TYPE": "Debug"
       }
     },
 
     { "name": "v3.5-24V",     "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v3.5-24V" } },
-    { "name": "v3.5-48V",     "inherits": "base-firmware", "cacheVariables": { "BOARD_VERSION": "v3.5-48V" } },
+    { "name": "v3.5-24V-debug",     "inherits": "base-firmware-debug", "cacheVariables": { "BOARD_VERSION": "v3.5-24V" } },
 
     {
       "name": "tests",

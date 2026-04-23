@@ -27,16 +27,6 @@ struct OpAmpBase {
      * there was a fault condition).
      */
     virtual bool is_ready() = 0;
-
-    /**
-     * @brief Returns the neutral voltage of the OpAmp in Volts
-     */
-    virtual float get_midpoint() = 0;
-
-    /**
-     * @brief Returns the maximum voltage swing away from the midpoint voltage (in Volts)
-     */
-    virtual float get_max_output_swing() = 0;
 };
 
 #endif // __GATE_DRIVER_HPP

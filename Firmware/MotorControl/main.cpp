@@ -1,7 +1,7 @@
 
 #define __MAIN_CPP__
-#include <communication/interface_i2c.h>
-#include <communication/interface_uart.h>
+// #include <communication/interface_i2c.h>
+// #include <communication/interface_uart.h>
 #include <communication/interface_usb.h>
 
 #include <communication/interface_can.hpp>
@@ -9,7 +9,7 @@
 #include "freertos_vars.h"
 #include "nvm_config.hpp"
 #include "odrive_main.h"
-#include "usart.h"
+// #include "usart.h"
 #include "usb_device.h"
 
 osSemaphoreId sem_usb_irq;
@@ -224,21 +224,21 @@ void vApplicationIdleHook(void) {
 
         odrv.system_stats_.max_stack_usage_axis = axis.stack_size_ - uxTaskGetStackHighWaterMark(axis.thread_id_) * sizeof(StackType_t);
         odrv.system_stats_.max_stack_usage_usb = stack_size_usb_thread - uxTaskGetStackHighWaterMark(usb_thread) * sizeof(StackType_t);
-        odrv.system_stats_.max_stack_usage_uart = stack_size_uart_thread - uxTaskGetStackHighWaterMark(uart_thread) * sizeof(StackType_t);
+        odrv.system_stats_.max_stack_usage_uart = 0;//stack_size_uart_thread - uxTaskGetStackHighWaterMark(uart_thread) * sizeof(StackType_t);
         odrv.system_stats_.max_stack_usage_startup = stack_size_default_task - uxTaskGetStackHighWaterMark(defaultTaskHandle) * sizeof(StackType_t);
         odrv.system_stats_.max_stack_usage_can = 0;
         odrv.system_stats_.max_stack_usage_analog = stack_size_analog_thread - uxTaskGetStackHighWaterMark(analog_thread) * sizeof(StackType_t);
 
         odrv.system_stats_.stack_size_axis = axis.stack_size_;
         odrv.system_stats_.stack_size_usb = stack_size_usb_thread;
-        odrv.system_stats_.stack_size_uart = stack_size_uart_thread;
-        odrv.system_stats_.stack_size_startup = stack_size_default_task;
+        odrv.system_stats_.stack_size_uart = 0;//stack_size_uart_thread;
+        odrv.system_stats_.stack_size_startup = 0;//stack_size_default_task;
         odrv.system_stats_.stack_size_can = 0;
         odrv.system_stats_.stack_size_analog = stack_size_analog_thread;
 
         odrv.system_stats_.prio_axis = osThreadGetPriority(axis.thread_id_);
         odrv.system_stats_.prio_usb = osThreadGetPriority(usb_thread);
-        odrv.system_stats_.prio_uart = osThreadGetPriority(uart_thread);
+        odrv.system_stats_.prio_uart = 0;//osThreadGetPriority(uart_thread);
         odrv.system_stats_.prio_startup = osThreadGetPriority(defaultTaskHandle);
         odrv.system_stats_.prio_can = 0;
         odrv.system_stats_.prio_analog = osThreadGetPriority(analog_thread);
@@ -347,7 +347,7 @@ void ODrive::control_loop_cb(uint32_t timestamp) {
         axis.sensorless_estimator_.phase_vel_.reset();
         axis.sensorless_estimator_.vel_estimate_.reset();
 
-        uart_poll();
+        //uart_poll();
         odrv.oscilloscope_.update();
     }
 

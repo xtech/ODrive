@@ -42,18 +42,19 @@ void init_communication(void) {
     if (odrv.config_.enable_uart_a && odrv.config_.enable_uart_b) {
         odrv.misconfigured_ = true;
     }
-
+/*
     if (odrv.config_.enable_uart_a && uart_a) {
         start_uart_server(uart_a);
     } else if (odrv.config_.enable_uart_b && uart_b) {
         start_uart_server(uart_b);
     }
-
+*/
     start_usb_server();
-
+/*
     if (odrv.config_.enable_i2c_a) {
         start_i2c_server();
     }
+    */
 }
 
 #include <fibre/async_stream.hpp>
@@ -67,14 +68,14 @@ int _write(int file, const char* data, int len) __attribute__((used));
 int _write(int file, const char* data, int len) {
     fibre::cbufptr_t buf{(const uint8_t*)data, (const uint8_t*)data + len};
 
-    if (odrv.config_.uart0_protocol == ODrive::STREAM_PROTOCOL_TYPE_STDOUT ||
+    /*if (odrv.config_.uart0_protocol == ODrive::STREAM_PROTOCOL_TYPE_STDOUT ||
         odrv.config_.uart0_protocol == ODrive::STREAM_PROTOCOL_TYPE_ASCII_AND_STDOUT) {
         uart0_stdout_sink.write(buf);
         if (!uart0_stdout_pending) {
             uart0_stdout_pending = true;
             osMessagePut(uart_event_queue, 3, 0);
         }
-    }
+    }*/
 
     if (odrv.config_.usb_cdc_protocol == ODrive::STREAM_PROTOCOL_TYPE_STDOUT ||
         odrv.config_.usb_cdc_protocol == ODrive::STREAM_PROTOCOL_TYPE_ASCII_AND_STDOUT) {

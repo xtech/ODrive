@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "serve": "vue-cli-service serve",
-    "build": "vue-cli-service build",
+    "serve": "NODE_OPTIONS=--openssl-legacy-provider vue-cli-service serve",
+    "build": "NODE_OPTIONS=--openssl-legacy-provider vue-cli-service build",
     "lint": "vue-cli-service lint",
     "enumGenerate": "node scripts/enumGenerate.js",
     "preelectron:build": "electron-icon-builder --input=./public/icon.png --output=build --flatten && npm run enumGenerate",
@@ -66,5 +66,8 @@
     "> 1%",
     "last 2 versions",
     "not dead"
-  ]
+  ],
+  "overrides": {
+    "websocket-driver": "^0.7.4"
+  }
 }
