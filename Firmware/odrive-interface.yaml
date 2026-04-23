@@ -1402,7 +1402,6 @@ interfaces:
           gpio2_mode: {type: ODrive.GpioMode, doc: Mode of GPIO2 (changes take effect after reboot), c_name: 'gpio_modes[2]'}
           gpio3_mode: {type: ODrive.GpioMode, doc: Mode of GPIO3 (changes take effect after reboot), c_name: 'gpio_modes[3]'}
       axis0: {type: ODrive.Axis, c_name: get_axis(0)}
-      axis1: {type: ODrive.Axis, c_name: get_axis(1)}
 
 valuetypes:
   ODrive.GpioMode:

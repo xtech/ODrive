@@ -98,7 +98,7 @@ bool Drv8376::init() {
 
     // wait for fault to go away
     while (!nfault_gpio_.read()) {
-        delay_us(1000);
+        //delay_us(1000);
     }
 
     state_ = kStateReady;
@@ -107,7 +107,7 @@ bool Drv8376::init() {
 
 void Drv8376::do_checks() {
      if (state_ != kStateUninitialized && !nfault_gpio_.read()) {
-         //state_ = kStateUninitialized;
+         state_ = kStateUninitialized;
     }
 }
 
