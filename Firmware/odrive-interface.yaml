@@ -141,17 +141,20 @@ interfaces:
           max_stack_usage_axis: readonly uint32
           max_stack_usage_usb: readonly uint32
           max_stack_usage_uart: readonly uint32
+          max_stack_usage_can: readonly uint32
           max_stack_usage_startup: readonly uint32
           max_stack_usage_analog: readonly uint32
           stack_size_axis: readonly uint32
           stack_size_usb: readonly uint32
           stack_size_uart: readonly uint32
           stack_size_startup: readonly uint32
+          stack_size_can: readonly uint32
           stack_size_analog: readonly uint32
           prio_axis: readonly int32
           prio_usb: readonly int32
           prio_uart: readonly int32
           prio_startup: readonly int32
+          prio_can: readonly int32
           prio_analog: readonly int32
           usb:
             c_is_class: False
@@ -292,13 +295,6 @@ interfaces:
         brief: Defines the baudrate used on the UART interface.
         doc: See `uart_a_baudrate` for details.
       uart_c_baudrate: {type: uint32, doc: Not supported on ODrive v3.x.}
-      enable_i2c_a:
-        type: bool
-        doc: |
-          Enables I2C. The I2C pins on ODrive v3.x are in conflict with CAN.
-          This setting has no effect if `enable_can_a` is also true.
-          This setting has no effect on ODrive v3.2 or earlier.
-          Changing this setting requires a reboot.
       usb_cdc_protocol:
         type: StreamProtocolType
         doc: |
@@ -397,6 +393,19 @@ interfaces:
 
       gpio3_analog_mapping: {type: Endpoint, c_name: 'analog_mappings[3]', doc: Make sure the corresponding GPIO is in `GPIO_MODE_ANALOG_IN`.}
       gpio4_analog_mapping: {type: Endpoint, c_name: 'analog_mappings[4]', doc: Make sure the corresponding GPIO is in `GPIO_MODE_ANALOG_IN`.}
+
+  ODrive.Can:
+    c_is_class: True
+    attributes:
+      error:
+        nullflag: NONE
+        flags: {DUPLICATE_CAN_IDS: }
+      config:
+        c_is_class: False
+        attributes:
+          baud_rate: {type: uint32, c_setter: 'set_baud_rate'}
+          protocol:
+            type: Protocol
 
   ODrive.Endpoint:
     c_is_class: False
@@ -510,6 +519,7 @@ interfaces:
               vel: float32
           sensorless_ramp: LockinConfig
           general_lockin: LockinConfig
+          can: CanConfig
       motor: Motor
       controller: Controller
       encoder: Encoder
@@ -526,6 +536,7 @@ interfaces:
           encoder_update: TaskTimer
           sensorless_estimator_update: TaskTimer
           endstop_update: TaskTimer
+          can_heartbeat: TaskTimer
           controller_update: TaskTimer
           open_loop_controller_update: TaskTimer
           acim_estimator_update: TaskTimer
@@ -562,6 +573,22 @@ interfaces:
       finish_on_vel: bool
       finish_on_distance: bool
       finish_on_enc_idx: bool
+
+  ODrive.Axis.CanConfig:
+    c_is_class: False
+    attributes:
+      node_id: uint32
+      is_extended: bool
+      heartbeat_rate_ms: uint32
+      encoder_rate_ms: uint32
+      motor_error_rate_ms: uint32
+      encoder_error_rate_ms: uint32
+      controller_error_rate_ms: uint32
+      sensorless_error_rate_ms: uint32
+      encoder_count_rate_ms: uint32
+      iq_rate_ms: uint32
+      sensorless_rate_ms: uint32
+      bus_vi_rate_ms: uint32
 
   ODrive.ThermistorCurrentLimiter:
     c_is_class: False
@@ -1401,6 +1428,24 @@ interfaces:
           gpio1_mode: {type: ODrive.GpioMode, doc: Mode of GPIO1 (changes take effect after reboot), c_name: 'gpio_modes[1]'}
           gpio2_mode: {type: ODrive.GpioMode, doc: Mode of GPIO2 (changes take effect after reboot), c_name: 'gpio_modes[2]'}
           gpio3_mode: {type: ODrive.GpioMode, doc: Mode of GPIO3 (changes take effect after reboot), c_name: 'gpio_modes[3]'}
+          gpio4_mode: {type: ODrive.GpioMode, doc: Mode of GPIO4 (changes take effect after reboot), c_name: 'gpio_modes[4]'}
+          gpio5_mode: {type: ODrive.GpioMode, doc: Mode of GPIO5 (changes take effect after reboot), c_name: 'gpio_modes[5]'}
+          gpio6_mode: {type: ODrive.GpioMode, doc: Mode of GPIO6 (changes take effect after reboot), c_name: 'gpio_modes[6]'}
+          gpio7_mode: {type: ODrive.GpioMode, doc: Mode of GPIO7 (changes take effect after reboot), c_name: 'gpio_modes[7]'}
+          gpio8_mode: {type: ODrive.GpioMode, doc: Mode of GPIO8 (changes take effect after reboot), c_name: 'gpio_modes[8]'}
+          gpio9_mode: {type: ODrive.GpioMode, doc: Mode of GPIO9 (changes take effect after reboot), c_name: 'gpio_modes[9]'}
+          gpio10_mode: {type: ODrive.GpioMode, doc: Mode of GPIO10 (changes take effect after reboot), c_name: 'gpio_modes[10]'}
+          gpio11_mode: {type: ODrive.GpioMode, doc: Mode of GPIO11 (changes take effect after reboot), c_name: 'gpio_modes[11]'}
+          gpio12_mode: {type: ODrive.GpioMode, doc: Mode of GPIO12 (changes take effect after reboot), c_name: 'gpio_modes[12]'}
+          gpio13_mode: {type: ODrive.GpioMode, doc: Mode of GPIO13 (changes take effect after reboot), c_name: 'gpio_modes[13]'}
+          gpio14_mode: {type: ODrive.GpioMode, doc: Mode of GPIO14 (changes take effect after reboot), c_name: 'gpio_modes[14]'}
+          gpio15_mode: {type: ODrive.GpioMode, doc: Mode of GPIO15 (changes take effect after reboot), c_name: 'gpio_modes[15]'}
+          gpio16_mode: {type: ODrive.GpioMode, doc: Mode of GPIO16 (changes take effect after reboot), c_name: 'gpio_modes[16]'}
+
+          gpio1_pwm_mapping: {type: ODrive.Endpoint, c_name: 'pwm_mappings[0]', doc: Make sure the corresponding GPIO is in `GPIO_MODE_PWM`.}
+          gpio2_pwm_mapping: {type: ODrive.Endpoint, c_name: 'pwm_mappings[1]', doc: Make sure the corresponding GPIO is in `GPIO_MODE_PWM`.}
+          gpio3_pwm_mapping: {type: ODrive.Endpoint, c_name: 'pwm_mappings[2]', doc: Make sure the corresponding GPIO is in `GPIO_MODE_PWM`.}
+          gpio4_pwm_mapping: {type: ODrive.Endpoint, c_name: 'pwm_mappings[3]', doc: Make sure the corresponding GPIO is in `GPIO_MODE_PWM`.}
       axis0: {type: ODrive.Axis, c_name: get_axis(0)}
 
 valuetypes:
@@ -1421,6 +1466,7 @@ valuetypes:
       UART_A: {doc: See `config.enable_uart_a`.}
       UART_B: {doc: This mode is not supported on ODrive v3.x.}
       UART_C: {doc: This mode is not supported on ODrive v3.x.}
+      CAN_A: {doc: See `config.enable_can_a`.}
       I2C_A: {doc: See `config.enable_i2c_a`.}
       SPI_A: {doc: Note that the SPI pins on ODrive v3.x are hardwired so they
         cannot be configured through software. Consequently, even though SPI_A
@@ -1448,6 +1494,11 @@ valuetypes:
       Stdout: {doc: Output of printf(). Only intended for developers who modify
           ODrive firmware.}
       AsciiAndStdout: {doc: Combination of `Ascii` and `Stdout`.}
+
+  ODrive.Can.Protocol:
+    flags: 
+      SIMPLE:
+        doc: CANSimple, an ODrive-specific protocol for basic functionality
 
   ODrive.Axis.AxisState: # TODO: remove redundant "Axis" in name
     values:

@@ -1,0 +1,4 @@
+<changelist name="Remove_old_ADC_and_GPIO_initialization_files_for_deprecated_board_versions__Moved_pin_defi" date="1776762565120" recycled="false">
+  <option name="PATH" value="$PROJECT_DIR$/.idea/shelf/Remove_old_ADC_and_GPIO_initialization_files_for_deprecated_board_versions__Moved_pin_defi/shelved.patch" />
+  <option name="DESCRIPTION" value="Remove old ADC and GPIO initialization files for deprecated board versions. Moved pin definitions to header files" />
+</changelist>

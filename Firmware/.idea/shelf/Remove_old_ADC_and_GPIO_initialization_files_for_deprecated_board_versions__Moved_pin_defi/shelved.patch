@@ -1,0 +1,1806 @@
+Index: communication/can/can_helpers.hpp
+===================================================================
+diff --git a/communication/can/can_helpers.hpp b/communication/can/can_helpers.hpp
+deleted file mode 100644
+--- a/communication/can/can_helpers.hpp	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ /dev/null	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
+@@ -1,97 +0,0 @@
+-#pragma once
+-
+-#include <stdint.h>
+-#include <algorithm>
+-#include <cstring>
+-#include <iterator>
+-
+-struct can_Message_t {
+-    uint32_t id = 0x000;  // 11-bit max is 0x7ff, 29-bit max is 0x1FFFFFFF
+-    bool isExt = false;
+-    bool rtr = false;
+-    uint8_t len = 8;
+-    uint8_t buf[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+-} ;
+-
+-struct can_Signal_t {
+-    const uint8_t startBit;
+-    const uint8_t length;
+-    const bool isIntel;
+-    const float factor;
+-    const float offset;
+-};
+-
+-struct can_Cyclic_t {
+-    uint32_t cycleTime_ms;
+-    uint32_t lastTime_ms;
+-};
+-
+-#include <iterator>
+-template <typename T>
+-constexpr T can_getSignal(can_Message_t msg, const uint8_t startBit, const uint8_t length, const bool isIntel) {
+-    uint64_t tempVal = 0;
+-    uint64_t mask = length < 64 ? (1ULL << length) - 1ULL : -1ULL;
+-
+-    if (isIntel) {
+-        std::memcpy(&tempVal, msg.buf, sizeof(tempVal));
+-        tempVal = (tempVal >> startBit) & mask;
+-    } else {
+-        std::reverse(std::begin(msg.buf), std::end(msg.buf));
+-        std::memcpy(&tempVal, msg.buf, sizeof(tempVal));
+-        tempVal = (tempVal >> (64 - startBit - length)) & mask;
+-    }
+-
+-    T retVal;
+-    std::memcpy(&retVal, &tempVal, sizeof(T));
+-    return retVal;
+-}
+-
+-template <typename T>
+-constexpr void can_setSignal(can_Message_t& msg, const T& val, const uint8_t startBit, const uint8_t length, const bool isIntel) {
+-    uint64_t valAsBits = 0;
+-    std::memcpy(&valAsBits, &val, sizeof(val));
+-
+-    uint64_t mask = length < 64 ? (1ULL << length) - 1ULL : -1ULL;
+-
+-    if (isIntel) {
+-        uint64_t data = 0;
+-        std::memcpy(&data, msg.buf, sizeof(data));
+-
+-        data &= ~(mask << startBit);
+-        data |= valAsBits << startBit;
+-
+-        std::memcpy(msg.buf, &data, sizeof(data));
+-    } else {
+-        uint64_t data = 0;
+-        std::reverse(std::begin(msg.buf), std::end(msg.buf));
+-        std::memcpy(&data, msg.buf, sizeof(data));
+-
+-        data &= ~(mask << (64 - startBit - length));
+-        data |= valAsBits << (64 - startBit - length);
+-
+-        std::memcpy(msg.buf, &data, sizeof(data));
+-        std::reverse(std::begin(msg.buf), std::end(msg.buf));
+-    }
+-}
+-
+-template<typename T>
+-void can_setSignal(can_Message_t& msg, const T& val, const uint8_t startBit, const uint8_t length, const bool isIntel, const float factor, const float offset) {
+-    T scaledVal = static_cast<T>((val - offset) / factor);
+-    can_setSignal<T>(msg, scaledVal, startBit, length, isIntel);
+-}
+-
+-template<typename T>
+-float can_getSignal(can_Message_t msg, const uint8_t startBit, const uint8_t length, const bool isIntel, const float factor, const float offset) {
+-    T retVal = can_getSignal<T>(msg, startBit, length, isIntel);
+-    return (retVal * factor) + offset;
+-}
+-
+-template <typename T>
+-float can_getSignal(can_Message_t msg, const can_Signal_t& signal) {
+-    return can_getSignal<T>(msg, signal.startBit, signal.length, signal.isIntel, signal.factor, signal.offset);
+-}
+-
+-template <typename T>
+-void can_setSignal(can_Message_t& msg, const T& val, const can_Signal_t& signal) {
+-    can_setSignal(msg, val, signal.startBit, signal.length, signal.isIntel, signal.factor, signal.offset);
+-}
+\ No newline at end of file
+Index: communication/can/can_simple.cpp
+===================================================================
+diff --git a/communication/can/can_simple.cpp b/communication/can/can_simple.cpp
+deleted file mode 100644
+--- a/communication/can/can_simple.cpp	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ /dev/null	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
+@@ -1,467 +0,0 @@
+-
+-#include "can_simple.hpp"
+-
+-#include <odrive_main.h>
+-#include <functional>
+-
+-bool CANSimple::init() {
+-    for (size_t i = 0; i < AXIS_COUNT; ++i) {
+-        if (!renew_subscription(i)) {
+-            return false;
+-        }
+-    }
+-
+-    return true;
+-}
+-
+-bool CANSimple::renew_subscription(size_t i) {
+-    Axis& axis = axes[i];
+-
+-    // TODO: remove these two lines (see comment in header)
+-    node_ids_[i] = axis.config_.can.node_id;
+-    extended_node_ids_[i] = axis.config_.can.is_extended;
+-
+-    MsgIdFilterSpecs filter = {
+-        .id = {},
+-        .mask = (uint32_t)(0xffffffff << NUM_CMD_ID_BITS)};
+-    if (axis.config_.can.is_extended) {
+-        filter.id = (uint32_t)(axis.config_.can.node_id << NUM_CMD_ID_BITS);
+-    } else {
+-        filter.id = (uint16_t)(axis.config_.can.node_id << NUM_CMD_ID_BITS);
+-    }
+-
+-    if (subscription_handles_[i]) {
+-        canbus_->unsubscribe(subscription_handles_[i]);
+-    }
+-
+-    return canbus_->subscribe(
+-        filter, [](void* ctx, const can_Message_t& msg) {
+-            ((CANSimple*)ctx)->handle_can_message(msg);
+-        },
+-        this, &subscription_handles_[i]);
+-}
+-
+-void CANSimple::handle_can_message(const can_Message_t& msg) {
+-    //     Frame
+-    // nodeID | CMD
+-    // 6 bits | 5 bits
+-    uint32_t nodeID = get_node_id(msg.id);
+-
+-    for (auto& axis : axes) {
+-        if ((axis.config_.can.node_id == nodeID) && (axis.config_.can.is_extended == msg.isExt)) {
+-            do_command(axis, msg);
+-            return;
+-        }
+-    }
+-}
+-
+-void CANSimple::do_command(Axis& axis, const can_Message_t& msg) {
+-    const uint32_t cmd = get_cmd_id(msg.id);
+-    axis.watchdog_feed();
+-    switch (cmd) {
+-        case MSG_CO_NMT_CTRL:
+-            break;
+-        case MSG_CO_HEARTBEAT_CMD:
+-            break;
+-        case MSG_ODRIVE_HEARTBEAT:
+-            // We don't currently do anything to respond to ODrive heartbeat messages
+-            break;
+-        case MSG_ODRIVE_ESTOP:
+-            estop_callback(axis, msg);
+-            break;
+-        case MSG_GET_MOTOR_ERROR:
+-            if (msg.rtr || msg.len == 0)
+-                get_motor_error_callback(axis);
+-            break;
+-        case MSG_GET_ENCODER_ERROR:
+-            if (msg.rtr || msg.len == 0)
+-                get_encoder_error_callback(axis);
+-            break;
+-        case MSG_GET_SENSORLESS_ERROR:
+-            if (msg.rtr || msg.len == 0)
+-                get_sensorless_error_callback(axis);
+-            break;
+-        case MSG_SET_AXIS_NODE_ID:
+-            set_axis_nodeid_callback(axis, msg);
+-            break;
+-        case MSG_SET_AXIS_REQUESTED_STATE:
+-            set_axis_requested_state_callback(axis, msg);
+-            break;
+-        case MSG_SET_AXIS_STARTUP_CONFIG:
+-            set_axis_startup_config_callback(axis, msg);
+-            break;
+-        case MSG_GET_ENCODER_ESTIMATES:
+-            if (msg.rtr || msg.len == 0)
+-                get_encoder_estimates_callback(axis);
+-            break;
+-        case MSG_GET_ENCODER_COUNT:
+-            if (msg.rtr || msg.len == 0)
+-                get_encoder_count_callback(axis);
+-            break;
+-        case MSG_SET_INPUT_POS:
+-            set_input_pos_callback(axis, msg);
+-            break;
+-        case MSG_SET_INPUT_VEL:
+-            set_input_vel_callback(axis, msg);
+-            break;
+-        case MSG_SET_INPUT_TORQUE:
+-            set_input_torque_callback(axis, msg);
+-            break;
+-        case MSG_SET_CONTROLLER_MODES:
+-            set_controller_modes_callback(axis, msg);
+-            break;
+-        case MSG_SET_LIMITS:
+-            set_limits_callback(axis, msg);
+-            break;
+-        case MSG_START_ANTICOGGING:
+-            start_anticogging_callback(axis, msg);
+-            break;
+-        case MSG_SET_TRAJ_INERTIA:
+-            set_traj_inertia_callback(axis, msg);
+-            break;
+-        case MSG_SET_TRAJ_ACCEL_LIMITS:
+-            set_traj_accel_limits_callback(axis, msg);
+-            break;
+-        case MSG_SET_TRAJ_VEL_LIMIT:
+-            set_traj_vel_limit_callback(axis, msg);
+-            break;
+-        case MSG_GET_IQ:
+-            if (msg.rtr || msg.len == 0)
+-                get_iq_callback(axis);
+-            break;
+-        case MSG_GET_SENSORLESS_ESTIMATES:
+-            if (msg.rtr || msg.len == 0)
+-                get_sensorless_estimates_callback(axis);
+-            break;
+-        case MSG_RESET_ODRIVE:
+-            NVIC_SystemReset();
+-            break;
+-        case MSG_GET_BUS_VOLTAGE_CURRENT:
+-            if (msg.rtr || msg.len == 0)
+-                get_bus_voltage_current_callback(axis);
+-            break;
+-        case MSG_CLEAR_ERRORS:
+-            clear_errors_callback(axis, msg);
+-            break;
+-        case MSG_SET_LINEAR_COUNT:
+-            set_linear_count_callback(axis, msg);
+-            break;
+-        case MSG_SET_POS_GAIN:
+-            set_pos_gain_callback(axis, msg);
+-            break;
+-        case MSG_SET_VEL_GAINS:
+-            set_vel_gains_callback(axis, msg);
+-            break;
+-        case MSG_GET_ADC_VOLTAGE:
+-            get_adc_voltage_callback(axis, msg);
+-            break;
+-        case MSG_GET_CONTROLLER_ERROR:
+-            get_controller_error_callback(axis);
+-            break;
+-        default:
+-            break;
+-    }
+-}
+-
+-void CANSimple::nmt_callback(const Axis& axis, const can_Message_t& msg) {
+-    // Not implemented
+-}
+-
+-void CANSimple::estop_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.error_ |= Axis::ERROR_ESTOP_REQUESTED;
+-}
+-
+-bool CANSimple::get_motor_error_callback(const Axis& axis) {
+-    can_Message_t txmsg;
+-    txmsg.id = axis.config_.can.node_id << NUM_CMD_ID_BITS;
+-    txmsg.id += MSG_GET_MOTOR_ERROR;  // heartbeat ID
+-    txmsg.isExt = axis.config_.can.is_extended;
+-    txmsg.len = 8;
+-
+-    can_setSignal(txmsg, axis.motor_.error_, 0, 64, true);
+-
+-    return canbus_->send_message(txmsg);
+-}
+-
+-bool CANSimple::get_encoder_error_callback(const Axis& axis) {
+-    can_Message_t txmsg;
+-    txmsg.id = axis.config_.can.node_id << NUM_CMD_ID_BITS;
+-    txmsg.id += MSG_GET_ENCODER_ERROR;  // heartbeat ID
+-    txmsg.isExt = axis.config_.can.is_extended;
+-    txmsg.len = 8;
+-
+-    can_setSignal(txmsg, axis.encoder_.error_, 0, 32, true);
+-
+-    return canbus_->send_message(txmsg);
+-}
+-
+-bool CANSimple::get_sensorless_error_callback(const Axis& axis) {
+-    can_Message_t txmsg;
+-    txmsg.id = axis.config_.can.node_id << NUM_CMD_ID_BITS;
+-    txmsg.id += MSG_GET_SENSORLESS_ERROR;  // heartbeat ID
+-    txmsg.isExt = axis.config_.can.is_extended;
+-    txmsg.len = 8;
+-
+-    can_setSignal(txmsg, axis.sensorless_estimator_.error_, 0, 32, true);
+-
+-    return canbus_->send_message(txmsg);
+-}
+-
+-bool CANSimple::get_controller_error_callback(const Axis& axis) {
+-    can_Message_t txmsg;
+-    txmsg.id = axis.config_.can.node_id << NUM_CMD_ID_BITS;
+-    txmsg.id += MSG_GET_CONTROLLER_ERROR;  // heartbeat ID
+-    txmsg.isExt = axis.config_.can.is_extended;
+-    txmsg.len = 8;
+-
+-    can_setSignal(txmsg, axis.controller_.error_, 0, 32, true);
+-
+-    return canbus_->send_message(txmsg);
+-}
+-
+-void CANSimple::set_axis_nodeid_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.config_.can.node_id = can_getSignal<uint32_t>(msg, 0, 32, true);
+-}
+-
+-void CANSimple::set_axis_requested_state_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.requested_state_ = static_cast<Axis::AxisState>(can_getSignal<int32_t>(msg, 0, 32, true));
+-}
+-
+-void CANSimple::set_axis_startup_config_callback(Axis& axis, const can_Message_t& msg) {
+-    // Not Implemented
+-}
+-
+-bool CANSimple::get_encoder_estimates_callback(const Axis& axis) {
+-    can_Message_t txmsg;
+-    txmsg.id = axis.config_.can.node_id << NUM_CMD_ID_BITS;
+-    txmsg.id += MSG_GET_ENCODER_ESTIMATES;  // heartbeat ID
+-    txmsg.isExt = axis.config_.can.is_extended;
+-    txmsg.len = 8;
+-
+-    can_setSignal<float>(txmsg, axis.controller_.pos_estimate_linear_src_.any().value_or(0.0f), 0, 32, true);
+-    can_setSignal<float>(txmsg, axis.controller_.vel_estimate_src_.any().value_or(0.0f), 32, 32, true);
+-
+-    return canbus_->send_message(txmsg);
+-}
+-
+-bool CANSimple::get_sensorless_estimates_callback(const Axis& axis) {
+-    can_Message_t txmsg;
+-    txmsg.id = axis.config_.can.node_id << NUM_CMD_ID_BITS;
+-    txmsg.id += MSG_GET_SENSORLESS_ESTIMATES;  // heartbeat ID
+-    txmsg.isExt = axis.config_.can.is_extended;
+-    txmsg.len = 8;
+-
+-    static_assert(sizeof(float) == sizeof(axis.sensorless_estimator_.pll_pos_));
+-
+-    can_setSignal<float>(txmsg, axis.sensorless_estimator_.pll_pos_, 0, 32, true);
+-    can_setSignal<float>(txmsg, axis.sensorless_estimator_.vel_estimate_.any().value_or(0.0f), 32, 32, true);
+-
+-    return canbus_->send_message(txmsg);
+-}
+-
+-bool CANSimple::get_encoder_count_callback(const Axis& axis) {
+-    can_Message_t txmsg;
+-    txmsg.id = axis.config_.can.node_id << NUM_CMD_ID_BITS;
+-    txmsg.id += MSG_GET_ENCODER_COUNT;
+-    txmsg.isExt = axis.config_.can.is_extended;
+-    txmsg.len = 8;
+-
+-    can_setSignal<int32_t>(txmsg, axis.encoder_.shadow_count_, 0, 32, true);
+-    can_setSignal<int32_t>(txmsg, axis.encoder_.count_in_cpr_, 32, 32, true);
+-    return canbus_->send_message(txmsg);
+-}
+-
+-void CANSimple::set_input_pos_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.controller_.set_input_pos_and_steps(can_getSignal<float>(msg, 0, 32, true));
+-    axis.controller_.input_vel_ = can_getSignal<int16_t>(msg, 32, 16, true, 0.001f, 0);
+-    axis.controller_.input_torque_ = can_getSignal<int16_t>(msg, 48, 16, true, 0.001f, 0);
+-    axis.controller_.input_pos_updated();
+-}
+-
+-void CANSimple::set_input_vel_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.controller_.input_vel_ = can_getSignal<float>(msg, 0, 32, true);
+-    axis.controller_.input_torque_ = can_getSignal<float>(msg, 32, 32, true);
+-}
+-
+-void CANSimple::set_input_torque_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.controller_.input_torque_ = can_getSignal<float>(msg, 0, 32, true);
+-}
+-
+-void CANSimple::set_controller_modes_callback(Axis& axis, const can_Message_t& msg) {
+-    Controller::ControlMode const mode = static_cast<Controller::ControlMode>(can_getSignal<int32_t>(msg, 0, 32, true));
+-    axis.controller_.config_.control_mode = static_cast<Controller::ControlMode>(mode);
+-    axis.controller_.config_.input_mode = static_cast<Controller::InputMode>(can_getSignal<int32_t>(msg, 32, 32, true));
+-    axis.controller_.control_mode_updated();
+-}
+-
+-void CANSimple::set_limits_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.controller_.config_.vel_limit = can_getSignal<float>(msg, 0, 32, true);
+-    axis.motor_.config_.current_lim = can_getSignal<float>(msg, 32, 32, true);
+-}
+-
+-void CANSimple::start_anticogging_callback(const Axis& axis, const can_Message_t& msg) {
+-    axis.controller_.start_anticogging_calibration();
+-}
+-
+-void CANSimple::set_traj_vel_limit_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.trap_traj_.config_.vel_limit = can_getSignal<float>(msg, 0, 32, true);
+-}
+-
+-void CANSimple::set_traj_accel_limits_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.trap_traj_.config_.accel_limit = can_getSignal<float>(msg, 0, 32, true);
+-    axis.trap_traj_.config_.decel_limit = can_getSignal<float>(msg, 32, 32, true);
+-}
+-
+-void CANSimple::set_traj_inertia_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.controller_.config_.inertia = can_getSignal<float>(msg, 0, 32, true);
+-}
+-
+-void CANSimple::set_linear_count_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.encoder_.set_linear_count(can_getSignal<int32_t>(msg, 0, 32, true));
+-}
+-
+-void CANSimple::set_pos_gain_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.controller_.config_.pos_gain = can_getSignal<float>(msg, 0, 32, true);
+-}
+-
+-void CANSimple::set_vel_gains_callback(Axis& axis, const can_Message_t& msg) {
+-    axis.controller_.config_.vel_gain = can_getSignal<float>(msg, 0, 32, true);
+-    axis.controller_.config_.vel_integrator_gain = can_getSignal<float>(msg, 32, 32, true);
+-}
+-
+-bool CANSimple::get_iq_callback(const Axis& axis) {
+-    can_Message_t txmsg;
+-    txmsg.id = axis.config_.can.node_id << NUM_CMD_ID_BITS;
+-    txmsg.id += MSG_GET_IQ;
+-    txmsg.isExt = axis.config_.can.is_extended;
+-    txmsg.len = 8;
+-
+-    std::optional<float2D> Idq_setpoint = axis.motor_.current_control_.Idq_setpoint_;
+-    if (!Idq_setpoint.has_value()) {
+-        Idq_setpoint = {0.0f, 0.0f};
+-    }
+-    
+-    static_assert(sizeof(float) == sizeof(Idq_setpoint->second));
+-    static_assert(sizeof(float) == sizeof(axis.motor_.current_control_.Iq_measured_));
+-    can_setSignal<float>(txmsg, Idq_setpoint->second, 0, 32, true);
+-    can_setSignal<float>(txmsg, axis.motor_.current_control_.Iq_measured_, 32, 32, true);
+-
+-    return canbus_->send_message(txmsg);
+-}
+-
+-bool CANSimple::get_bus_voltage_current_callback(const Axis& axis) {
+-    can_Message_t txmsg;
+-
+-    txmsg.id = axis.config_.can.node_id << NUM_CMD_ID_BITS;
+-    txmsg.id += MSG_GET_BUS_VOLTAGE_CURRENT;
+-    txmsg.isExt = axis.config_.can.is_extended;
+-    txmsg.len = 8;
+-
+-    static_assert(sizeof(float) == sizeof(vbus_voltage));
+-    static_assert(sizeof(float) == sizeof(ibus_));
+-    can_setSignal<float>(txmsg, vbus_voltage, 0, 32, true);
+-    can_setSignal<float>(txmsg, ibus_, 32, 32, true);
+-
+-    return canbus_->send_message(txmsg);
+-}
+-
+-bool CANSimple::get_adc_voltage_callback(const Axis& axis, const can_Message_t& msg) {
+-    can_Message_t txmsg;
+-
+-    txmsg.id = axis.config_.can.node_id << NUM_CMD_ID_BITS;
+-    txmsg.id += MSG_GET_ADC_VOLTAGE;
+-    txmsg.isExt = axis.config_.can.is_extended;
+-    txmsg.len = 8;
+-
+-    auto gpio_num = can_getSignal<uint8_t>(msg, 0, 8, true);
+-    if (gpio_num < GPIO_COUNT) {
+-        auto voltage = get_adc_voltage(get_gpio(gpio_num));
+-        can_setSignal<float>(txmsg, voltage, 0, 32, true);
+-        return canbus_->send_message(txmsg);
+-    } else {
+-        return false;
+-    }
+-}
+-
+-void CANSimple::clear_errors_callback(Axis& axis, const can_Message_t& msg) {
+-    odrv.clear_errors();  // TODO: might want to clear axis errors only
+-}
+-
+-uint32_t CANSimple::service_stack() {
+-    uint32_t nextServiceTime = UINT32_MAX;
+-    uint32_t now = HAL_GetTick();
+-
+-    // TODO: remove this polling loop and replace with protocol hook
+-    for (size_t i = 0; i < AXIS_COUNT; ++i) {
+-        bool node_id_changed = (axes[i].config_.can.node_id != node_ids_[i]) || (axes[i].config_.can.is_extended != extended_node_ids_[i]);
+-        if (node_id_changed) {
+-            renew_subscription(i);
+-        }
+-    }
+-
+-    struct periodic {
+-        const uint32_t& rate;
+-        uint32_t& last_time;
+-        bool (CANSimple::* callback)(const Axis& axis);
+-    };
+-
+-    for (auto& axis : axes) {
+-        std::array<periodic, 10> periodics = {{
+-            {axis.config_.can.heartbeat_rate_ms, axis.can_.last_heartbeat, &CANSimple::send_heartbeat},
+-            {axis.config_.can.encoder_rate_ms, axis.can_.last_encoder, &CANSimple::get_encoder_estimates_callback},
+-            {axis.config_.can.motor_error_rate_ms, axis.can_.last_motor_error, &CANSimple::get_motor_error_callback},
+-            {axis.config_.can.encoder_error_rate_ms, axis.can_.last_encoder_error, &CANSimple::get_encoder_error_callback},
+-            {axis.config_.can.controller_error_rate_ms, axis.can_.last_controller_error, &CANSimple::get_controller_error_callback},
+-            {axis.config_.can.sensorless_error_rate_ms, axis.can_.last_sensorless_error, &CANSimple::get_sensorless_error_callback},
+-            {axis.config_.can.encoder_count_rate_ms, axis.can_.last_encoder_count, &CANSimple::get_encoder_count_callback},
+-            {axis.config_.can.iq_rate_ms, axis.can_.last_iq, &CANSimple::get_iq_callback},
+-            {axis.config_.can.sensorless_rate_ms, axis.can_.last_sensorless, &CANSimple::get_sensorless_estimates_callback},
+-            {axis.config_.can.bus_vi_rate_ms, axis.can_.last_bus_vi, &CANSimple::get_bus_voltage_current_callback},
+-        }};
+-
+-        MEASURE_TIME(axis.task_times_.can_heartbeat) {
+-            for (auto& msg : periodics) {
+-                if (msg.rate > 0) {
+-                    if ((now - msg.last_time) >= msg.rate) {
+-                        if (std::invoke(msg.callback, this, axis)) {
+-                            msg.last_time = now;
+-                        }
+-                    }
+-
+-                    int nextAxisService = msg.last_time + msg.rate - now;
+-                    nextServiceTime = std::min(nextServiceTime, static_cast<uint32_t>(std::max(0, nextAxisService)));
+-                }
+-            }
+-        }
+-    }
+-
+-    return nextServiceTime;
+-}
+-
+-bool CANSimple::send_heartbeat(const Axis& axis) {
+-    can_Message_t txmsg;
+-    txmsg.id = axis.config_.can.node_id << NUM_CMD_ID_BITS;
+-    txmsg.id += MSG_ODRIVE_HEARTBEAT;  // heartbeat ID
+-    txmsg.isExt = axis.config_.can.is_extended;
+-    txmsg.len = 8;
+-
+-    can_setSignal(txmsg, axis.error_, 0, 32, true);
+-    can_setSignal(txmsg, uint8_t(axis.current_state_), 32, 8, true);
+-
+-    // Motor flags
+-    uint8_t motorFlags = axis.motor_.error_ != 0;
+-
+-    // Encoder flags
+-    uint8_t encoderFlags = axis.encoder_.error_ != 0;
+-
+-    // Controller flags
+-    uint8_t controllerFlags =axis.controller_.error_ != 0;
+-    uint8_t trajDone = uint8_t(axis.controller_.trajectory_done_) << 7;
+-    controllerFlags |= trajDone;
+-
+-    can_setSignal(txmsg, motorFlags, 40, 8, true);
+-    can_setSignal(txmsg, encoderFlags, 48, 8, true);
+-    can_setSignal(txmsg, controllerFlags, 56, 8, true);
+-
+-    return canbus_->send_message(txmsg);
+-}
+Index: communication/can/can_simple.hpp
+===================================================================
+diff --git a/communication/can/can_simple.hpp b/communication/can/can_simple.hpp
+deleted file mode 100644
+--- a/communication/can/can_simple.hpp	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ /dev/null	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
+@@ -1,113 +0,0 @@
+-#ifndef __CAN_SIMPLE_HPP_
+-#define __CAN_SIMPLE_HPP_
+-
+-#include "canbus.hpp"
+-#include "axis.hpp"
+-
+-class CANSimple {
+-   public:
+-    enum {
+-        MSG_CO_NMT_CTRL = 0x000,  // CANOpen NMT Message REC
+-        MSG_ODRIVE_HEARTBEAT,
+-        MSG_ODRIVE_ESTOP,
+-        MSG_GET_MOTOR_ERROR,  // Errors
+-        MSG_GET_ENCODER_ERROR,
+-        MSG_GET_SENSORLESS_ERROR,
+-        MSG_SET_AXIS_NODE_ID,
+-        MSG_SET_AXIS_REQUESTED_STATE,
+-        MSG_SET_AXIS_STARTUP_CONFIG,
+-        MSG_GET_ENCODER_ESTIMATES,
+-        MSG_GET_ENCODER_COUNT,
+-        MSG_SET_CONTROLLER_MODES,
+-        MSG_SET_INPUT_POS,
+-        MSG_SET_INPUT_VEL,
+-        MSG_SET_INPUT_TORQUE,
+-        MSG_SET_LIMITS,
+-        MSG_START_ANTICOGGING,
+-        MSG_SET_TRAJ_VEL_LIMIT,
+-        MSG_SET_TRAJ_ACCEL_LIMITS,
+-        MSG_SET_TRAJ_INERTIA,
+-        MSG_GET_IQ,
+-        MSG_GET_SENSORLESS_ESTIMATES,
+-        MSG_RESET_ODRIVE,
+-        MSG_GET_BUS_VOLTAGE_CURRENT,
+-        MSG_CLEAR_ERRORS,
+-        MSG_SET_LINEAR_COUNT,
+-        MSG_SET_POS_GAIN,
+-        MSG_SET_VEL_GAINS,
+-        MSG_GET_ADC_VOLTAGE,
+-        MSG_GET_CONTROLLER_ERROR,
+-        MSG_CO_HEARTBEAT_CMD = 0x700,  // CANOpen NMT Heartbeat  SEND
+-    };
+-
+-    CANSimple(CanBusBase* canbus) : canbus_(canbus) {}
+-
+-    bool init();
+-    uint32_t service_stack();
+-
+-   private:
+-
+-    bool renew_subscription(size_t i);
+-    bool send_heartbeat(const Axis& axis);
+-
+-    void handle_can_message(const can_Message_t& msg);
+-
+-    void do_command(Axis& axis, const can_Message_t& cmd);
+-    
+-    // Get functions (msg.rtr bit must be set)
+-    bool get_motor_error_callback(const Axis& axis);
+-    bool get_encoder_error_callback(const Axis& axis);
+-    bool get_controller_error_callback(const Axis& axis);
+-    bool get_sensorless_error_callback(const Axis& axis);
+-    bool get_encoder_estimates_callback(const Axis& axis);
+-    bool get_encoder_count_callback(const Axis& axis);
+-    bool get_iq_callback(const Axis& axis);
+-    bool get_sensorless_estimates_callback(const Axis& axis);
+-    bool get_bus_voltage_current_callback(const Axis& axis);
+-    // msg.rtr bit must NOT be set
+-    bool get_adc_voltage_callback(const Axis& axis, const can_Message_t& msg);
+-
+-    // Set functions
+-    static void set_axis_nodeid_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_axis_requested_state_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_axis_startup_config_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_input_pos_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_input_vel_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_input_torque_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_controller_modes_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_limits_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_traj_vel_limit_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_traj_accel_limits_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_traj_inertia_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_linear_count_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_pos_gain_callback(Axis& axis, const can_Message_t& msg);
+-    static void set_vel_gains_callback(Axis& axis, const can_Message_t& msg);
+-
+-    // Other functions
+-    static void nmt_callback(const Axis& axis, const can_Message_t& msg);
+-    static void estop_callback(Axis& axis, const can_Message_t& msg);
+-    static void clear_errors_callback(Axis& axis, const can_Message_t& msg);
+-    static void start_anticogging_callback(const Axis& axis, const can_Message_t& msg);
+-
+-    static constexpr uint8_t NUM_NODE_ID_BITS = 6;
+-    static constexpr uint8_t NUM_CMD_ID_BITS = 11 - NUM_NODE_ID_BITS;
+-
+-    // Utility functions
+-    static constexpr uint32_t get_node_id(uint32_t msgID) {
+-        return (msgID >> NUM_CMD_ID_BITS);  // Upper 6 or more bits
+-    };
+-
+-    static constexpr uint8_t get_cmd_id(uint32_t msgID) {
+-        return (msgID & 0x01F);  // Bottom 5 bits
+-    }
+-
+-    CanBusBase* canbus_;
+-    CanBusBase::CanSubscription* subscription_handles_[AXIS_COUNT];
+-
+-    // TODO: we this is a hack but actually we should use protocol hooks to
+-    // renew our filter when the node ID changes
+-    uint32_t node_ids_[AXIS_COUNT];
+-    bool extended_node_ids_[AXIS_COUNT];
+-};
+-
+-#endif
+Index: communication/can/canbus.hpp
+===================================================================
+diff --git a/communication/can/canbus.hpp b/communication/can/canbus.hpp
+deleted file mode 100644
+--- a/communication/can/canbus.hpp	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ /dev/null	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
+@@ -1,43 +0,0 @@
+-#ifndef __CANBUS_HPP
+-#define __CANBUS_HPP
+-
+-#include "can_helpers.hpp"
+-#include <variant>
+-
+-struct MsgIdFilterSpecs {
+-    std::variant<uint16_t, uint32_t> id;
+-    uint32_t mask;
+-};
+-
+-class CanBusBase {
+-public:
+-    typedef void(*on_can_message_cb_t)(void* ctx, const can_Message_t& message);
+-    struct CanSubscription {};
+-
+-    /**
+-     * @brief Sends the specified CAN message.
+-     * 
+-     * @returns: true on success or false otherwise (e.g. if the send queue is
+-     * full).
+-     */
+-    virtual bool send_message(const can_Message_t& message) = 0;
+-
+-    /**
+-     * @brief Registers a callback that will be invoked for every incoming CAN
+-     * message that matches the filter.
+-     * 
+-     * @param handle: On success this handle is set to an opaque pointer that
+-     *        can be used to cancel the subscription.
+-     * 
+-     * @returns: true on success or false otherwise (e.g. if the maximum number
+-     * of subscriptions has been reached).
+-     */
+-    virtual bool subscribe(const MsgIdFilterSpecs& filter, on_can_message_cb_t callback, void* ctx, CanSubscription** handle) = 0;
+-
+-    /**
+-     * @brief Deregisters a callback that was previously registered with subscribe().
+-     */
+-    virtual bool unsubscribe(CanSubscription* handle) = 0;
+-};
+-
+-#endif // __CANBUS_HPP
+\ No newline at end of file
+Index: communication/can/odrive_can.cpp
+===================================================================
+diff --git a/communication/can/odrive_can.cpp b/communication/can/odrive_can.cpp
+deleted file mode 100644
+--- a/communication/can/odrive_can.cpp	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ /dev/null	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
+@@ -1,238 +0,0 @@
+-#include "odrive_can.hpp"
+-
+-#include <can.h>
+-#include <cmsis_os.h>
+-
+-#include "freertos_vars.h"
+-#include "utils.hpp"
+-
+-// Safer context handling via maps instead of arrays
+-// #include <unordered_map>
+-// std::unordered_map<CAN_HandleTypeDef *, ODriveCAN *> ctxMap;
+-
+-
+-bool ODriveCAN::apply_config() {
+-    config_.parent = this;
+-    set_baud_rate(config_.baud_rate);
+-    return true;
+-}
+-
+-bool ODriveCAN::reinit() {
+-    HAL_CAN_Stop(handle_);
+-    HAL_CAN_ResetError(handle_);
+-    return (HAL_CAN_Init(handle_) == HAL_OK)
+-        && (HAL_CAN_Start(handle_) == HAL_OK)
+-        && (HAL_CAN_ActivateNotification(handle_, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING | CAN_IT_TX_MAILBOX_EMPTY) == HAL_OK);
+-}
+-
+-bool ODriveCAN::start_server(CAN_HandleTypeDef* handle) {
+-    handle_ = handle;
+-
+-    handle_->Init.Prescaler = CAN_FREQ / config_.baud_rate;
+-    if (!reinit()) {
+-        return false;
+-    }
+-
+-    auto wrapper = [](void* ctx) {
+-        ((ODriveCAN*)ctx)->can_server_thread();
+-    };
+-    osThreadDef(can_server_thread_def, wrapper, osPriorityNormal, 0, stack_size_ / sizeof(StackType_t));
+-    thread_id_ = osThreadCreate(osThread(can_server_thread_def), this);
+-
+-    return true;
+-}
+-
+-void ODriveCAN::can_server_thread() {
+-    Protocol protocol = config_.protocol;
+-
+-    if (protocol & PROTOCOL_SIMPLE) {
+-        can_simple_.init();
+-    }
+-
+-    for (;;) {
+-        uint32_t status = HAL_CAN_GetError(handle_);
+-        if (status == HAL_CAN_ERROR_NONE) {
+-            uint32_t next_service_time = UINT32_MAX;
+-
+-            if (protocol & PROTOCOL_SIMPLE) {
+-                next_service_time = std::min(can_simple_.service_stack(), next_service_time);
+-            }
+-
+-            process_rx_fifo(CAN_RX_FIFO0);
+-            process_rx_fifo(CAN_RX_FIFO1);
+-            HAL_CAN_ActivateNotification(handle_, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING | CAN_IT_TX_MAILBOX_EMPTY);
+-
+-            // wait at least 1ms to prevent busy-spin on failed sends
+-            osSemaphoreWait(sem_can, std::max(next_service_time, 1UL));
+-        } else if (status == HAL_CAN_ERROR_TIMEOUT) {
+-            HAL_CAN_ResetError(handle_);
+-            status = HAL_CAN_Start(handle_);
+-            if (status == HAL_OK)
+-                status = HAL_CAN_ActivateNotification(handle_, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_TX_MAILBOX_EMPTY);
+-        }
+-    }
+-}
+-
+-// Set one of only a few common baud rates.  CAN doesn't do arbitrary baud rates well due to the time-quanta issue.
+-// 21 TQ allows for easy sampling at exactly 80% (recommended by Vector Informatik GmbH for high reliability systems)
+-// Conveniently, the CAN peripheral's 42MHz clock lets us easily create 21TQs for all common baud rates
+-bool ODriveCAN::set_baud_rate(uint32_t baud_rate) {
+-    uint32_t prescaler = CAN_FREQ / baud_rate;
+-    if (prescaler * baud_rate == CAN_FREQ) {
+-        // valid baud rate
+-        config_.baud_rate = baud_rate;
+-        if (handle_) {
+-            handle_->Init.Prescaler = prescaler;
+-            return reinit();
+-        }
+-        return true;
+-    } else {
+-        // invalid baud rate - ignore
+-        return false;
+-    }
+-}
+-
+-void ODriveCAN::process_rx_fifo(uint32_t fifo) {
+-    while (HAL_CAN_GetRxFifoFillLevel(handle_, fifo)) {
+-        CAN_RxHeaderTypeDef header;
+-        can_Message_t rxmsg;
+-        HAL_CAN_GetRxMessage(handle_, fifo, &header, rxmsg.buf);
+-
+-        rxmsg.isExt = header.IDE;
+-        rxmsg.id = rxmsg.isExt ? header.ExtId : header.StdId;  // If it's an extended message, pass the extended ID
+-        rxmsg.len = header.DLC;
+-        rxmsg.rtr = header.RTR;
+-
+-        // TODO: this could be optimized with an ahead-of-time computed
+-        // index-to-filter map
+-
+-        size_t fifo0_idx = 0;
+-        size_t fifo1_idx = 0;
+-
+-        // Find the triggered subscription item based on header.FilterMatchIndex
+-        auto it = std::find_if(subscriptions_.begin(), subscriptions_.end(), [&](auto& s) {
+-            size_t current_idx = (s.fifo == 0 ? fifo0_idx : fifo1_idx)++;
+-            return (header.FilterMatchIndex == current_idx) && (s.fifo == fifo);
+-        });
+-
+-        if (it == subscriptions_.end()) {
+-            continue;
+-        }
+-
+-        it->callback(it->ctx, rxmsg);
+-    }
+-}
+-
+-// Send a CAN message on the bus
+-bool ODriveCAN::send_message(const can_Message_t &txmsg) {
+-    if (HAL_CAN_GetError(handle_) != HAL_CAN_ERROR_NONE) {
+-        return false;
+-    }
+-
+-    CAN_TxHeaderTypeDef header;
+-    header.StdId = txmsg.id;
+-    header.ExtId = txmsg.id;
+-    header.IDE = txmsg.isExt ? CAN_ID_EXT : CAN_ID_STD;
+-    header.RTR = CAN_RTR_DATA;
+-    header.DLC = txmsg.len;
+-    header.TransmitGlobalTime = FunctionalState::DISABLE;
+-
+-    uint32_t retTxMailbox = 0;
+-    if (!HAL_CAN_GetTxMailboxesFreeLevel(handle_)) {
+-        return false;
+-    }
+-    
+-    return HAL_CAN_AddTxMessage(handle_, &header, (uint8_t*)txmsg.buf, &retTxMailbox) == HAL_OK;
+-}
+-
+-//void ODriveCAN::set_error(Error error) {
+-//    error_ |= error;
+-//}
+-
+-bool ODriveCAN::subscribe(const MsgIdFilterSpecs& filter, on_can_message_cb_t callback, void* ctx, CanSubscription** handle) {
+-    auto it = std::find_if(subscriptions_.begin(), subscriptions_.end(), [](auto& subscription) {
+-        return subscription.fifo == kCanFifoNone;
+-    });
+-
+-    if (it == subscriptions_.end()) {
+-        return false; // all subscription slots in use
+-    }
+-
+-    it->callback = callback;
+-    it->ctx = ctx;
+-    it->fifo = CAN_RX_FIFO0; // TODO: make customizable
+-    if (handle) {
+-        *handle = &*it;
+-    }
+-
+-    bool is_extended = filter.id.index() == 1;
+-    uint32_t id = is_extended ?
+-                  ((std::get<1>(filter.id) << 3) | (1 << 2)) :
+-                  (std::get<0>(filter.id) << 21);
+-    uint32_t mask = (is_extended ? (filter.mask << 3) : (filter.mask << 21))
+-                  | (1 << 2); // care about the is_extended bit
+-
+-    CAN_FilterTypeDef hal_filter;
+-    hal_filter.FilterActivation = ENABLE;
+-    hal_filter.FilterBank = &*it - &subscriptions_[0];
+-    hal_filter.FilterFIFOAssignment = it->fifo;
+-    hal_filter.FilterIdHigh = (id >> 16) & 0xffff;
+-    hal_filter.FilterIdLow = id & 0xffff;
+-    hal_filter.FilterMaskIdHigh = (mask >> 16) & 0xffff;
+-    hal_filter.FilterMaskIdLow = mask & 0xffff;
+-    hal_filter.FilterMode = CAN_FILTERMODE_IDMASK;
+-    hal_filter.FilterScale = CAN_FILTERSCALE_32BIT;
+-
+-    if (HAL_CAN_ConfigFilter(handle_, &hal_filter) != HAL_OK) {
+-        return false;
+-    }
+-    return true;
+-}
+-
+-bool ODriveCAN::unsubscribe(CanSubscription* handle) {
+-    ODriveCanSubscription* subscription = static_cast<ODriveCanSubscription*>(handle);
+-    if (subscription < subscriptions_.begin() || subscription >= subscriptions_.end()) {
+-        return false;
+-    }
+-    if (subscription->fifo != kCanFifoNone) {
+-        return false; // not in use
+-    }
+-
+-    subscription->fifo = kCanFifoNone;
+-
+-    CAN_FilterTypeDef hal_filter = {};
+-    hal_filter.FilterActivation = DISABLE;
+-    return HAL_CAN_ConfigFilter(handle_, &hal_filter) == HAL_OK;
+-}
+-
+-void HAL_CAN_TxMailbox0CompleteCallback(CAN_HandleTypeDef *hcan) {
+-    HAL_CAN_DeactivateNotification(hcan, CAN_IT_TX_MAILBOX_EMPTY);
+-    osSemaphoreRelease(sem_can);
+-}
+-void HAL_CAN_TxMailbox1CompleteCallback(CAN_HandleTypeDef *hcan) {
+-    HAL_CAN_DeactivateNotification(hcan, CAN_IT_TX_MAILBOX_EMPTY);
+-    osSemaphoreRelease(sem_can);
+-}
+-void HAL_CAN_TxMailbox2CompleteCallback(CAN_HandleTypeDef *hcan) {
+-    HAL_CAN_DeactivateNotification(hcan, CAN_IT_TX_MAILBOX_EMPTY);
+-    osSemaphoreRelease(sem_can);
+-}
+-void HAL_CAN_TxMailbox0AbortCallback(CAN_HandleTypeDef *hcan) {}
+-void HAL_CAN_TxMailbox1AbortCallback(CAN_HandleTypeDef *hcan) {}
+-void HAL_CAN_TxMailbox2AbortCallback(CAN_HandleTypeDef *hcan) {}
+-void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan) {
+-    HAL_CAN_DeactivateNotification(hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
+-    osSemaphoreRelease(sem_can);
+-}
+-void HAL_CAN_RxFifo0FullCallback(CAN_HandleTypeDef *hcan) {
+-    HAL_CAN_DeactivateNotification(hcan, CAN_IT_RX_FIFO1_MSG_PENDING);
+-    osSemaphoreRelease(sem_can);
+-}
+-void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan) {}
+-void HAL_CAN_RxFifo1FullCallback(CAN_HandleTypeDef *hcan) {}
+-void HAL_CAN_SleepCallback(CAN_HandleTypeDef *hcan) {}
+-void HAL_CAN_WakeUpFromRxMsgCallback(CAN_HandleTypeDef *hcan) {}
+-
+-void HAL_CAN_ErrorCallback(CAN_HandleTypeDef *hcan) {
+-    //HAL_CAN_ResetError(hcan);
+-}
+Index: communication/can/odrive_can.hpp
+===================================================================
+diff --git a/communication/can/odrive_can.hpp b/communication/can/odrive_can.hpp
+deleted file mode 100644
+--- a/communication/can/odrive_can.hpp	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ /dev/null	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
+@@ -1,68 +0,0 @@
+-#ifndef __ODRIVE_CAN_HPP
+-#define __ODRIVE_CAN_HPP
+-
+-#include <cmsis_os.h>
+-
+-#include "canbus.hpp"
+-#include "can_simple.hpp"
+-#include <autogen/interfaces.hpp>
+-
+-#define CAN_CLK_HZ (42000000)
+-#define CAN_CLK_MHZ (42)
+-
+-// Anonymous enum for defining the most common CAN baud rates
+-enum {
+-    CAN_BAUD_125K = 125000,
+-    CAN_BAUD_250K = 250000,
+-    CAN_BAUD_500K = 500000,
+-    CAN_BAUD_1000K = 1000000,
+-    CAN_BAUD_1M = 1000000
+-};
+-
+-class ODriveCAN : public CanBusBase, public ODriveIntf::CanIntf {
+-public:
+-    struct Config_t {
+-        uint32_t baud_rate = CAN_BAUD_250K;
+-        Protocol protocol = PROTOCOL_SIMPLE;
+-
+-        ODriveCAN* parent = nullptr; // set in apply_config()
+-        void set_baud_rate(uint32_t value) { parent->set_baud_rate(value); }
+-    };
+-
+-    ODriveCAN() {}
+-
+-    bool apply_config();
+-    bool start_server(CAN_HandleTypeDef* handle);
+-
+-    Error error_ = ERROR_NONE;
+-
+-    Config_t config_;
+-    CANSimple can_simple_{this};
+-
+-    osThreadId thread_id_;
+-    const uint32_t stack_size_ = 1024;  // Bytes
+-
+-private:
+-    static const uint8_t kCanFifoNone = 0xff;
+-
+-    struct ODriveCanSubscription : CanSubscription {
+-        uint8_t fifo = kCanFifoNone;
+-        on_can_message_cb_t callback;
+-        void* ctx;
+-    };
+-
+-    bool reinit();
+-    void can_server_thread();
+-    bool set_baud_rate(uint32_t baud_rate);
+-    void process_rx_fifo(uint32_t fifo);
+-    bool send_message(const can_Message_t& message) final;
+-    bool subscribe(const MsgIdFilterSpecs& filter, on_can_message_cb_t callback, void* ctx, CanSubscription** handle) final;
+-    bool unsubscribe(CanSubscription* handle) final;
+-
+-    // Hardware supports at most 28 filters unless we do optimizations. For now
+-    // we don't need that many.
+-    std::array<ODriveCanSubscription, 8> subscriptions_;
+-    CAN_HandleTypeDef *handle_ = nullptr;
+-};
+-
+-#endif  // __ODRIVE_CAN_HPP
+Index: Board/v3/Inc/tim.h
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>/**\n  ******************************************************************************\n  * File Name          : TIM.h\n  * Description        : This file provides code for the configuration\n  *                      of the TIM instances.\n  ******************************************************************************\n  * This notice applies to any and all portions of this file\n  * that are not between comment pairs USER CODE BEGIN and\n  * USER CODE END. Other portions of this file, whether \n  * inserted by the user or by software development tools\n  * are owned by their respective copyright owners.\n  *\n  * Copyright (c) 2018 STMicroelectronics International N.V. \n  * All rights reserved.\n  *\n  * Redistribution and use in source and binary forms, with or without \n  * modification, are permitted, provided that the following conditions are met:\n  *\n  * 1. Redistribution of source code must retain the above copyright notice, \n  *    this list of conditions and the following disclaimer.\n  * 2. Redistributions in binary form must reproduce the above copyright notice,\n  *    this list of conditions and the following disclaimer in the documentation\n  *    and/or other materials provided with the distribution.\n  * 3. Neither the name of STMicroelectronics nor the names of other \n  *    contributors to this software may be used to endorse or promote products \n  *    derived from this software without specific written permission.\n  * 4. This software, including modifications and/or derivative works of this \n  *    software, must execute solely and exclusively on microcontroller or\n  *    microprocessor devices manufactured by or for STMicroelectronics.\n  * 5. Redistribution and use of this software other than as permitted under \n  *    this license is void and will automatically terminate your rights under \n  *    this license. \n  *\n  * THIS SOFTWARE IS PROVIDED BY STMICROELECTRONICS AND CONTRIBUTORS \"AS IS\" \n  * AND ANY EXPRESS, IMPLIED OR STATUTORY WARRANTIES, INCLUDING, BUT NOT \n  * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A \n  * PARTICULAR PURPOSE AND NON-INFRINGEMENT OF THIRD PARTY INTELLECTUAL PROPERTY\n  * RIGHTS ARE DISCLAIMED TO THE FULLEST EXTENT PERMITTED BY LAW. IN NO EVENT \n  * SHALL STMICROELECTRONICS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,\n  * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT\n  * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, \n  * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF \n  * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING \n  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,\n  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n  *\n  ******************************************************************************\n  */\n/* Define to prevent recursive inclusion -------------------------------------*/\n#ifndef __tim_H\n#define __tim_H\n#ifdef __cplusplus\n extern \"C\" {\n#endif\n\n/* Includes ------------------------------------------------------------------*/\n#include \"stm32f4xx_hal.h\"\n#include \"main.h\"\n\n/* USER CODE BEGIN Includes */\n\n/* USER CODE END Includes */\n\nextern TIM_HandleTypeDef htim1;\nextern TIM_HandleTypeDef htim2;\nextern TIM_HandleTypeDef htim3;\nextern TIM_HandleTypeDef htim4;\nextern TIM_HandleTypeDef htim5;\nextern TIM_HandleTypeDef htim8;\nextern TIM_HandleTypeDef htim13;\n\n/* USER CODE BEGIN Private defines */\n\n/* USER CODE END Private defines */\n\nextern void _Error_Handler(char *, int);\n\nvoid MX_TIM1_Init(void);\nvoid MX_TIM2_Init(void);\nvoid MX_TIM3_Init(void);\nvoid MX_TIM4_Init(void);\nvoid MX_TIM5_Init(void);\nvoid MX_TIM8_Init(void);\nvoid MX_TIM13_Init(void);\n                        \nvoid HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);\n                                                            \n/* USER CODE BEGIN Prototypes */\n\n/* USER CODE END Prototypes */\n\n#ifdef __cplusplus\n}\n#endif\n#endif /*__ tim_H */\n\n/**\n  * @}\n  */\n\n/**\n  * @}\n  */\n\n/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/Board/v3/Inc/tim.h b/Board/v3/Inc/tim.h
+--- a/Board/v3/Inc/tim.h	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ b/Board/v3/Inc/tim.h	(date 1776762094768)
+@@ -64,9 +64,7 @@
+ extern TIM_HandleTypeDef htim1;
+ extern TIM_HandleTypeDef htim2;
+ extern TIM_HandleTypeDef htim3;
+-extern TIM_HandleTypeDef htim4;
+ extern TIM_HandleTypeDef htim5;
+-extern TIM_HandleTypeDef htim8;
+ extern TIM_HandleTypeDef htim13;
+ 
+ /* USER CODE BEGIN Private defines */
+@@ -78,9 +76,7 @@
+ void MX_TIM1_Init(void);
+ void MX_TIM2_Init(void);
+ void MX_TIM3_Init(void);
+-void MX_TIM4_Init(void);
+ void MX_TIM5_Init(void);
+-void MX_TIM8_Init(void);
+ void MX_TIM13_Init(void);
+                         
+ void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
+Index: MotorControl/main.cpp
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>\n#define __MAIN_CPP__\n#include \"odrive_main.h\"\n#include \"nvm_config.hpp\"\n\n#include \"usart.h\"\n#include \"freertos_vars.h\"\n#include \"usb_device.h\"\n#include <communication/interface_usb.h>\n#include <communication/interface_uart.h>\n#include <communication/interface_i2c.h>\n#include <communication/interface_can.hpp>\n\nosSemaphoreId sem_usb_irq;\nosMessageQId uart_event_queue;\nosMessageQId usb_event_queue;\nosSemaphoreId sem_can;\n\n#if defined(STM32F405xx)\n// Place FreeRTOS heap in core coupled memory for better performance\n__attribute__((section(\".ccmram\")))\n#endif\nuint8_t ucHeap[configTOTAL_HEAP_SIZE];\n\nuint32_t _reboot_cookie __attribute__ ((section (\".noinit\")));\nextern char _estack; // provided by the linker script\n\n\nODrive odrv{};\n\n\nConfigManager config_manager;\n\nclass StatusLedController {\npublic:\n    void update();\n};\n\nStatusLedController status_led_controller;\n\nvoid StatusLedController::update() {\n#if HW_VERSION_MAJOR == 4\n    uint32_t t = HAL_GetTick();\n\n    bool is_booting = std::any_of(axes.begin(), axes.end(), [](Axis& axis){\n        return axis.current_state_ == Axis::AXIS_STATE_UNDEFINED;\n    });\n\n    if (is_booting) {\n        return;\n    }\n\n    bool is_armed = std::any_of(axes.begin(), axes.end(), [](Axis& axis){\n        return axis.motor_.is_armed_;\n    });\n    bool any_error = odrv.any_error();\n\n    if (is_armed) {\n        // Fast green pulsating\n        const uint32_t period_ms = 256;\n        const uint8_t min_brightness = 0;\n        const uint8_t max_brightness = 255;\n        uint32_t brightness = std::abs((int32_t)(t % period_ms) - (int32_t)(period_ms / 2)) * (max_brightness - min_brightness) / (period_ms / 2) + min_brightness;\n        brightness = (brightness * brightness) >> 8; // eye response very roughly sqrt\n        status_led.set_color(rgb_t{(uint8_t)(any_error ? brightness / 2 : 0), (uint8_t)brightness, 0});\n    } else if (any_error) {\n        // Red pulsating\n        const uint32_t period_ms = 1024;\n        const uint8_t min_brightness = 0;\n        const uint8_t max_brightness = 255;\n        uint32_t brightness = std::abs((int32_t)(t % period_ms) - (int32_t)(period_ms / 2)) * (max_brightness - min_brightness) / (period_ms / 2) + min_brightness;\n        brightness = (brightness * brightness) >> 8; // eye response very roughly sqrt\n        status_led.set_color(rgb_t{(uint8_t)brightness, 0, 0});\n    } else {\n        // Slow blue pulsating\n        const uint32_t period_ms = 4096;\n        const uint8_t min_brightness = 50;\n        const uint8_t max_brightness = 160;\n        uint32_t brightness = std::abs((int32_t)(t % period_ms) - (int32_t)(period_ms / 2)) * (max_brightness - min_brightness) / (period_ms / 2) + min_brightness;\n        brightness = (brightness * brightness) >> 8; // eye response very roughly sqrt\n        status_led.set_color(rgb_t{0, 0, (uint8_t)brightness});\n    }\n#endif\n}\n\nstatic bool config_read_all() {\n    bool success = board_read_config() &&\n           config_manager.read(&odrv.config_) &&\n           config_manager.read(&odrv.can_.config_);\n    for (size_t i = 0; (i < AXIS_COUNT) && success; ++i) {\n        success = config_manager.read(&encoders[i].config_) &&\n                  config_manager.read(&axes[i].sensorless_estimator_.config_) &&\n                  config_manager.read(&axes[i].controller_.config_) &&\n                  config_manager.read(&axes[i].trap_traj_.config_) &&\n                  config_manager.read(&axes[i].min_endstop_.config_) &&\n                  config_manager.read(&axes[i].max_endstop_.config_) &&\n                  config_manager.read(&axes[i].mechanical_brake_.config_) &&\n                  config_manager.read(&motors[i].config_) &&\n                  config_manager.read(&motors[i].fet_thermistor_.config_) &&\n                  config_manager.read(&motors[i].motor_thermistor_.config_) &&\n                  config_manager.read(&axes[i].config_);\n    }\n    return success;\n}\n\nstatic bool config_write_all() {\n    bool success = board_write_config() &&\n           config_manager.write(&odrv.config_) &&\n           config_manager.write(&odrv.can_.config_);\n    for (size_t i = 0; (i < AXIS_COUNT) && success; ++i) {\n        success = config_manager.write(&encoders[i].config_) &&\n                  config_manager.write(&axes[i].sensorless_estimator_.config_) &&\n                  config_manager.write(&axes[i].controller_.config_) &&\n                  config_manager.write(&axes[i].trap_traj_.config_) &&\n                  config_manager.write(&axes[i].min_endstop_.config_) &&\n                  config_manager.write(&axes[i].max_endstop_.config_) &&\n                  config_manager.write(&axes[i].mechanical_brake_.config_) &&\n                  config_manager.write(&motors[i].config_) &&\n                  config_manager.write(&motors[i].fet_thermistor_.config_) &&\n                  config_manager.write(&motors[i].motor_thermistor_.config_) &&\n                  config_manager.write(&axes[i].config_);\n    }\n    return success;\n}\n\nstatic void config_clear_all() {\n    odrv.config_ = {};\n    odrv.can_.config_ = {};\n    for (size_t i = 0; i < AXIS_COUNT; ++i) {\n        encoders[i].config_ = {};\n        axes[i].sensorless_estimator_.config_ = {};\n        axes[i].controller_.config_ = {};\n        axes[i].controller_.config_.load_encoder_axis = i;\n        axes[i].trap_traj_.config_ = {};\n        axes[i].min_endstop_.config_ = {};\n        axes[i].max_endstop_.config_ = {};\n        axes[i].mechanical_brake_.config_ = {};\n        motors[i].config_ = {};\n        motors[i].fet_thermistor_.config_ = {};\n        motors[i].motor_thermistor_.config_ = {};\n        axes[i].clear_config();\n    }\n}\n\nstatic bool config_apply_all() {\n    bool success = odrv.can_.apply_config();\n    for (size_t i = 0; (i < AXIS_COUNT) && success; ++i) {\n        success = encoders[i].apply_config(motors[i].config_.motor_type)\n               && axes[i].controller_.apply_config()\n               && axes[i].min_endstop_.apply_config()\n               && axes[i].max_endstop_.apply_config()\n               && motors[i].apply_config()\n               && motors[i].motor_thermistor_.apply_config()\n               && axes[i].apply_config();\n    }\n    return success;\n}\n\nbool ODrive::save_configuration(void) {\n    bool success;\n\n    CRITICAL_SECTION() {\n        bool any_armed = std::any_of(axes.begin(), axes.end(),\n            [](auto& axis){ return axis.motor_.is_armed_; });\n        if (any_armed) {\n            return false;\n        }\n\n        size_t config_size = 0;\n        success = config_manager.prepare_store()\n               && config_write_all()\n               && config_manager.start_store(&config_size)\n               && config_write_all()\n               && config_manager.finish_store();\n\n        // FIXME: during save_configuration we might miss some interrupts\n        // because the CPU gets halted during a flash erase. Missing events\n        // (encoder updates, step/dir steps) is not good so to be sure we just\n        // reboot.\n        NVIC_SystemReset();\n    }\n\n    return success;\n}\n\nvoid ODrive::erase_configuration(void) {\n    NVM_erase();\n\n    // FIXME: this reboot is a workaround because we don't want the next save_configuration\n    // to write back the old configuration from RAM to NVM. The proper action would\n    // be to reset the values in RAM to default. However right now that's not\n    // practical because several startup actions depend on the config. The\n    // other problem is that the stack overflows if we reset to default here.\n    NVIC_SystemReset();\n}\n\nvoid ODrive::enter_dfu_mode() {\n    if ((hw_version_major_ == 3) && (hw_version_minor_ >= 5)) {\n        __asm volatile (\"CPSID I\\n\\t\":::\"memory\"); // disable interrupts\n        _reboot_cookie = 0xDEADBEEF;\n        NVIC_SystemReset();\n    } else {\n        /*\n        * DFU mode is only allowed on board version >= 3.5 because it can burn\n        * the brake resistor FETs on older boards.\n        * If you really want to use it on an older board, add 3.3k pull-down resistors\n        * to the AUX_L and AUX_H signals and _only then_ uncomment these lines.\n        */\n        //__asm volatile (\"CPSID I\\n\\t\":::\"memory\"); // disable interrupts\n        //_reboot_cookie = 0xDEADFE75;\n        //NVIC_SystemReset();\n    }\n}\n\nbool ODrive::any_error() {\n    return error_ != ODrive::ERROR_NONE\n        || std::any_of(axes.begin(), axes.end(), [](Axis& axis){\n            return axis.error_ != Axis::ERROR_NONE\n                || axis.motor_.error_ != Motor::ERROR_NONE\n                || axis.sensorless_estimator_.error_ != SensorlessEstimator::ERROR_NONE\n                || axis.encoder_.error_ != Encoder::ERROR_NONE\n                || axis.controller_.error_ != Controller::ERROR_NONE;\n        });\n}\n\nuint64_t ODrive::get_drv_fault() {\n#if AXIS_COUNT == 1\n    return motors[0].gate_driver_.get_error();\n#elif AXIS_COUNT == 2\n    return (uint64_t)motors[0].gate_driver_.get_error() | ((uint64_t)motors[1].gate_driver_.get_error() << 32ULL);\n#else\n    #error \"not supported\"\n#endif\n}\n\nvoid ODrive::clear_errors() {\n    for (auto& axis: axes) {\n        axis.motor_.error_ = Motor::ERROR_NONE;\n        axis.controller_.error_ = Controller::ERROR_NONE;\n        axis.sensorless_estimator_.error_ = SensorlessEstimator::ERROR_NONE;\n        axis.encoder_.error_ = Encoder::ERROR_NONE;\n        axis.encoder_.spi_error_rate_ = 0.0f;\n        axis.error_ = Axis::ERROR_NONE;\n    }\n    error_ = ERROR_NONE;\n    if (odrv.config_.enable_brake_resistor) {\n        safety_critical_arm_brake_resistor();\n    }\n}\n\nextern \"C\" {\n\nvoid vApplicationStackOverflowHook(xTaskHandle *pxTask, signed portCHAR *pcTaskName) {\n    for(auto& axis: axes){\n        axis.motor_.disarm();\n    }\n    safety_critical_disarm_brake_resistor();\n    for (;;); // TODO: safe action\n}\n\nvoid vApplicationIdleHook(void) {\n    if (odrv.system_stats_.fully_booted) {\n        odrv.system_stats_.uptime = xTaskGetTickCount();\n        odrv.system_stats_.min_heap_space = xPortGetMinimumEverFreeHeapSize();\n\n        uint32_t min_stack_space[AXIS_COUNT];\n        std::transform(axes.begin(), axes.end(), std::begin(min_stack_space), [](auto& axis) { return uxTaskGetStackHighWaterMark(axis.thread_id_) * sizeof(StackType_t); });\n        odrv.system_stats_.max_stack_usage_axis = axes[0].stack_size_ - *std::min_element(std::begin(min_stack_space), std::end(min_stack_space));\n        odrv.system_stats_.max_stack_usage_usb = stack_size_usb_thread - uxTaskGetStackHighWaterMark(usb_thread) * sizeof(StackType_t);\n        odrv.system_stats_.max_stack_usage_uart = stack_size_uart_thread - uxTaskGetStackHighWaterMark(uart_thread) * sizeof(StackType_t);\n        odrv.system_stats_.max_stack_usage_startup = stack_size_default_task - uxTaskGetStackHighWaterMark(defaultTaskHandle) * sizeof(StackType_t);\n        odrv.system_stats_.max_stack_usage_can = odrv.can_.stack_size_ - uxTaskGetStackHighWaterMark(odrv.can_.thread_id_) * sizeof(StackType_t);\n        odrv.system_stats_.max_stack_usage_analog =  stack_size_analog_thread - uxTaskGetStackHighWaterMark(analog_thread) * sizeof(StackType_t);\n\n        odrv.system_stats_.stack_size_axis = axes[0].stack_size_;\n        odrv.system_stats_.stack_size_usb = stack_size_usb_thread;\n        odrv.system_stats_.stack_size_uart = stack_size_uart_thread;\n        odrv.system_stats_.stack_size_startup = stack_size_default_task;\n        odrv.system_stats_.stack_size_can = odrv.can_.stack_size_;\n        odrv.system_stats_.stack_size_analog = stack_size_analog_thread;\n\n        odrv.system_stats_.prio_axis = osThreadGetPriority(axes[0].thread_id_);\n        odrv.system_stats_.prio_usb = osThreadGetPriority(usb_thread);\n        odrv.system_stats_.prio_uart = osThreadGetPriority(uart_thread);\n        odrv.system_stats_.prio_startup = osThreadGetPriority(defaultTaskHandle);\n        odrv.system_stats_.prio_can = osThreadGetPriority(odrv.can_.thread_id_);\n        odrv.system_stats_.prio_analog = osThreadGetPriority(analog_thread);\n\n        status_led_controller.update();\n    }\n}\n}\n\n/**\n * @brief Runs system-level checks that need to be as real-time as possible.\n * \n * This function is called after every current measurement of every motor.\n * It should finish as quickly as possible.\n */\nvoid ODrive::do_fast_checks() {\n    if (!(vbus_voltage >= config_.dc_bus_undervoltage_trip_level))\n        disarm_with_error(ERROR_DC_BUS_UNDER_VOLTAGE);\n    if (!(vbus_voltage <= config_.dc_bus_overvoltage_trip_level))\n        disarm_with_error(ERROR_DC_BUS_OVER_VOLTAGE);\n}\n\n/**\n * @brief Floats all power phases on the system (all motors and brake resistors).\n *\n * This should be called if a system level exception ocurred that makes it\n * unsafe to run power through the system in general.\n */\nvoid ODrive::disarm_with_error(Error error) {\n    CRITICAL_SECTION() {\n        for (auto& axis: axes) {\n            axis.motor_.disarm_with_error(Motor::ERROR_SYSTEM_LEVEL);\n        }\n        safety_critical_disarm_brake_resistor();\n        error_ |= error;\n    }\n}\n\n/**\n * @brief Runs the periodic sampling tasks\n * \n * All components that need to sample real-world data should do it in this\n * function as it runs on a high interrupt priority and provides lowest possible\n * timing jitter.\n * \n * All function called from this function should adhere to the following rules:\n *  - Try to use the same number of CPU cycles in every iteration.\n *    (reason: Tasks that run later in the function still want lowest possible timing jitter)\n *  - Use as few cycles as possible.\n *    (reason: The interrupt blocks other important interrupts (TODO: which ones?))\n *  - Not call any FreeRTOS functions.\n *    (reason: The interrupt priority is higher than the max allowed priority for syscalls)\n * \n * Time consuming and undeterministic logic/arithmetic should live on\n * control_loop_cb() instead.\n */\nvoid ODrive::sampling_cb() {\n    n_evt_sampling_++;\n\n    MEASURE_TIME(task_times_.sampling) {\n        for (auto& axis: axes) {\n            axis.encoder_.sample_now();\n        }\n    }\n}\n\n/**\n * @brief Runs the periodic control loop.\n * \n * This function is executed in a low priority interrupt context and is allowed\n * to call CMSIS functions.\n * \n * Yet it runs at a higher priority than communication workloads.\n * \n * @param update_cnt: The true count of update events (wrapping around at 16\n *        bits). This is used for timestamp calculation in the face of\n *        potentially missed timer update interrupts. Therefore this counter\n *        must not rely on any interrupts.\n */\nvoid ODrive::control_loop_cb(uint32_t timestamp) {\n    last_update_timestamp_ = timestamp;\n    n_evt_control_loop_++;\n\n    // TODO: use a configurable component list for most of the following things\n\n    MEASURE_TIME(task_times_.control_loop_misc) {\n        // Reset all output ports so that we are certain about the freshness of\n        // all values that we use.\n        // If we forget to reset a value here the worst that can happen is that\n        // this safety check doesn't work.\n        // TODO: maybe we should add a check to output ports that prevents\n        // double-setting the value.\n        for (auto& axis: axes) {\n            axis.acim_estimator_.slip_vel_.reset();\n            axis.acim_estimator_.stator_phase_vel_.reset();\n            axis.acim_estimator_.stator_phase_.reset();\n            axis.controller_.torque_output_.reset();\n            axis.encoder_.phase_.reset();\n            axis.encoder_.phase_vel_.reset();\n            axis.encoder_.pos_estimate_.reset();\n            axis.encoder_.vel_estimate_.reset();\n            axis.encoder_.pos_circular_.reset();\n            axis.motor_.Vdq_setpoint_.reset();\n            axis.motor_.Idq_setpoint_.reset();\n            axis.open_loop_controller_.Idq_setpoint_.reset();\n            axis.open_loop_controller_.Vdq_setpoint_.reset();\n            axis.open_loop_controller_.phase_.reset();\n            axis.open_loop_controller_.phase_vel_.reset();\n            axis.open_loop_controller_.total_distance_.reset();\n            axis.sensorless_estimator_.phase_.reset();\n            axis.sensorless_estimator_.phase_vel_.reset();\n            axis.sensorless_estimator_.vel_estimate_.reset();\n        }\n\n        uart_poll();\n        odrv.oscilloscope_.update();\n    }\n\n    for (auto& axis : axes) {\n        MEASURE_TIME(axis.task_times_.endstop_update) {\n            axis.min_endstop_.update();\n            axis.max_endstop_.update();\n        }\n    }\n\n    MEASURE_TIME(task_times_.control_loop_checks) {\n        for (auto& axis: axes) {\n            // look for errors at axis level and also all subcomponents\n            bool checks_ok = axis.do_checks(timestamp);\n\n            // make sure the watchdog is being fed. \n            bool watchdog_ok = axis.watchdog_check();\n\n            if (!checks_ok || !watchdog_ok) {\n                axis.motor_.disarm();\n            }\n        }\n    }\n\n    for (auto& axis: axes) {\n        // Sub-components should use set_error which will propegate to this error_\n        MEASURE_TIME(axis.task_times_.thermistor_update) {\n            axis.motor_.fet_thermistor_.update();\n            axis.motor_.motor_thermistor_.update();\n        }\n\n        MEASURE_TIME(axis.task_times_.encoder_update)\n            axis.encoder_.update();\n    }\n\n    // Controller of either axis might use the encoder estimate of the other\n    // axis so we process both encoders before we continue.\n\n    for (auto& axis: axes) {\n        MEASURE_TIME(axis.task_times_.sensorless_estimator_update)\n            axis.sensorless_estimator_.update();\n\n        MEASURE_TIME(axis.task_times_.controller_update) {\n            if (!axis.controller_.update()) { // uses position and velocity from encoder\n                axis.error_ |= Axis::ERROR_CONTROLLER_FAILED;\n            }\n        }\n\n        MEASURE_TIME(axis.task_times_.open_loop_controller_update)\n            axis.open_loop_controller_.update(timestamp);\n\n        MEASURE_TIME(axis.task_times_.motor_update)\n            axis.motor_.update(timestamp); // uses torque from controller and phase_vel from encoder\n\n        MEASURE_TIME(axis.task_times_.current_controller_update)\n            axis.motor_.current_control_.update(timestamp); // uses the output of controller_ or open_loop_contoller_ and encoder_ or sensorless_estimator_ or acim_estimator_\n    }\n\n    // Tell the axis threads that the control loop has finished\n    for (auto& axis: axes) {\n        if (axis.thread_id_) {\n            osSignalSet(axis.thread_id_, 0x0001);\n        }\n    }\n\n    get_gpio(odrv.config_.error_gpio_pin).write(odrv.any_error());\n}\n\n\n/** @brief For diagnostics only */\nuint32_t ODrive::get_interrupt_status(int32_t irqn) {\n    if ((irqn < -14) || (irqn >= 240)) {\n        return 0xffffffff;\n    }\n\n    uint8_t priority = (irqn < -12)\n        ? 0 // hard fault and NMI always have maximum priority\n        : NVIC_GetPriority((IRQn_Type)irqn);\n    uint32_t counter = GET_IRQ_COUNTER((IRQn_Type)irqn);\n    bool is_enabled = (irqn < 0)\n        ? true // processor interrupt vectors are always enabled\n        : NVIC->ISER[(((uint32_t)(int32_t)irqn) >> 5UL)] & (uint32_t)(1UL << (((uint32_t)(int32_t)irqn) & 0x1FUL));\n    \n    return priority | ((counter & 0x7ffffff) << 8) | (is_enabled ? 0x80000000 : 0);\n}\n\n/** @brief For diagnostics only */\nuint32_t ODrive::get_dma_status(uint8_t stream_num) {\n    DMA_Stream_TypeDef* streams[] = {\n        DMA1_Stream0, DMA1_Stream1, DMA1_Stream2, DMA1_Stream3, DMA1_Stream4, DMA1_Stream5, DMA1_Stream6, DMA1_Stream7,\n        DMA2_Stream0, DMA2_Stream1, DMA2_Stream2, DMA2_Stream3, DMA2_Stream4, DMA2_Stream5, DMA2_Stream6, DMA2_Stream7\n    };\n    if (stream_num >= 16) {\n        return 0xffffffff;\n    }\n    DMA_Stream_TypeDef* stream = streams[stream_num];\n    bool is_reset = (stream->CR == 0x00000000)\n                 && (stream->NDTR == 0x00000000)\n                 && (stream->PAR == 0x00000000)\n                 && (stream->M0AR == 0x00000000)\n                 && (stream->M1AR == 0x00000000)\n                 && (stream->FCR == 0x00000021);\n    uint8_t channel = ((stream->CR & DMA_SxCR_CHSEL_Msk) >> DMA_SxCR_CHSEL_Pos);\n    uint8_t priority = ((stream->CR & DMA_SxCR_PL_Msk) >> DMA_SxCR_PL_Pos);\n    return (is_reset ? 0 : 0x80000000) | ((channel & 0x7) << 2) | (priority & 0x3);\n}\n\nuint32_t ODrive::get_gpio_states() {\n    // TODO: get values that were sampled synchronously with the control loop\n    uint32_t val = 0;\n    for (size_t i = 0; i < GPIO_COUNT; ++i) {\n        val |= ((gpios[i].read() ? 1UL : 0UL) << i);\n    }\n    return val;\n}\n\n/**\n * @brief Main thread started from main().\n */\nstatic void rtos_main(void*) {\n    // Init USB device\n    MX_USB_DEVICE_Init();\n\n\n    // Start ADC for temperature measurements and user measurements\n    start_general_purpose_adc();\n\n    //osDelay(100);\n    // Init communications (this requires the axis objects to be constructed)\n    init_communication();\n\n    // Start pwm-in compare modules\n    // must happen after communication is initialized\n    pwm0_input.init();\n\n    // Set up the CS pins for absolute encoders (TODO: move to GPIO init switch statement)\n    for(auto& axis : axes){\n        if(axis.encoder_.config_.mode & Encoder::MODE_FLAG_ABS){\n            axis.encoder_.abs_spi_cs_pin_init();\n        }\n    }\n\n    // Try to initialized gate drivers for fault-free startup.\n    // If this does not succeed, a fault will be raised and the idle loop will\n    // periodically attempt to reinit the gate driver.\n    for(auto& axis: axes){\n        axis.motor_.setup();\n    }\n\n    for(auto& axis: axes){\n        axis.encoder_.setup();\n    }\n\n    for(auto& axis: axes){\n        axis.acim_estimator_.idq_src_.connect_to(&axis.motor_.Idq_setpoint_);\n    }\n\n    // Start PWM and enable adc interrupts/callbacks\n    start_adc_pwm();\n    start_analog_thread();\n\n    // Wait for up to 2s for motor to become ready to allow for error-free\n    // startup. This delay gives the current sensor calibration time to\n    // converge. If the DRV chip is unpowered, the motor will not become ready\n    // but we still enter idle state.\n    for (size_t i = 0; i < 2000; ++i) {\n        bool motors_ready = std::all_of(axes.begin(), axes.end(), [](auto& axis) {\n            return axis.motor_.current_meas_.has_value();\n        });\n        if (motors_ready) {\n            break;\n        }\n        osDelay(1);\n    }\n\n    for (auto& axis: axes) {\n        axis.sensorless_estimator_.error_ &= ~SensorlessEstimator::ERROR_UNKNOWN_CURRENT_MEASUREMENT;\n    }\n\n    // Start state machine threads. Each thread will go through various calibration\n    // procedures and then run the actual controller loops.\n    // TODO: generalize for AXIS_COUNT != 2\n    for (size_t i = 0; i < AXIS_COUNT; ++i) {\n        axes[i].start_thread();\n    }\n\n    odrv.system_stats_.fully_booted = true;\n\n    // Main thread finished starting everything and can delete itself now (yes this is legal).\n    vTaskDelete(defaultTaskHandle);\n}\n\n/**\n * @brief Carries out early startup tasks that need to run before any static\n * initializers.\n * This function gets called from the startup assembly code.\n */\nextern \"C\" void early_start_checks(void) {\n    if(_reboot_cookie == 0xDEADFE75) {\n        /* The STM DFU bootloader enables internal pull-up resistors on PB10 (AUX_H)\n        * and PB11 (AUX_L), thereby causing shoot-through on the brake resistor\n        * FETs and obliterating them unless external 3.3k pull-down resistors are\n        * present. Pull-downs are only present on ODrive 3.5 or newer.\n        * On older boards we disable DFU by default but if the user insists\n        * there's only one thing left that might save it: time.\n        * The brake resistor gate driver needs a certain 10V supply (GVDD) to\n        * make it work. This voltage is supplied by the motor gate drivers which get\n        * disabled at system reset. So over time GVDD voltage _should_ below\n        * dangerous levels. This is completely handwavy and should not be relied on\n        * so you are on your own on if you ignore this warning.\n        *\n        * This loop takes 5 cycles per iteration and at this point the system runs\n        * on the internal 16MHz RC oscillator so the delay is about 2 seconds.\n        */\n        for (size_t i = 0; i < (16000000UL / 5UL * 2UL); ++i) {\n            __NOP();\n        }\n        _reboot_cookie = 0xDEADBEEF;\n    }\n\n    /* We could jump to the bootloader directly on demand without rebooting\n    but that requires us to reset several peripherals and interrupts for it\n    to function correctly. Therefore it's easier to just reset the entire chip. */\n    if(_reboot_cookie == 0xDEADBEEF) {\n        _reboot_cookie = 0xCAFEFEED;  //Reset bootloader trigger\n        __set_MSP((uintptr_t)&_estack);\n        // http://www.st.com/content/ccc/resource/technical/document/application_note/6a/17/92/02/58/98/45/0c/CD00264379.pdf/files/CD00264379.pdf\n        void (*builtin_bootloader)(void) = (void (*)(void))(*((uint32_t *)0x1FFF0004));\n        builtin_bootloader();\n    }\n\n    /* The bootloader might fail to properly clean up after itself,\n    so if we're not sure that the system is in a clean state we\n    just reset it again */\n    if(_reboot_cookie != 42) {\n        _reboot_cookie = 42;\n        NVIC_SystemReset();\n    }\n}\n\n/**\n * @brief Main entry point called from assembly startup code.\n */\nextern \"C\" int main(void) {\n    // This procedure of building a USB serial number should be identical\n    // to the way the STM's built-in USB bootloader does it. This means\n    // that the device will have the same serial number in normal and DFU mode.\n    uint32_t uuid0 = *(uint32_t *)(UID_BASE + 0);\n    uint32_t uuid1 = *(uint32_t *)(UID_BASE + 4);\n    uint32_t uuid2 = *(uint32_t *)(UID_BASE + 8);\n    uint32_t uuid_mixed_part = uuid0 + uuid2;\n    serial_number = ((uint64_t)uuid_mixed_part << 16) | (uint64_t)(uuid1 >> 16);\n\n    uint64_t val = serial_number;\n    for (size_t i = 0; i < 12; ++i) {\n        serial_number_str[i] = \"0123456789ABCDEF\"[(val >> (48-4)) & 0xf];\n        val <<= 4;\n    }\n    serial_number_str[12] = 0;\n\n    // Init low level system functions (clocks, flash interface)\n    system_init();\n\n    // Load configuration from NVM. This needs to happen after system_init()\n    // since the flash interface must be initialized and before board_init()\n    // since board initialization can depend on the config.\n    size_t config_size = 0;\n    bool success = config_manager.start_load()\n            && config_read_all()\n            && config_manager.finish_load(&config_size)\n            && config_apply_all();\n    if (success) {\n        odrv.user_config_loaded_ = config_size;\n    } else {\n        config_clear_all();\n        config_apply_all();\n    }\n\n    odrv.misconfigured_ = odrv.misconfigured_\n            || (odrv.config_.enable_uart_a && !uart_a)\n            || (odrv.config_.enable_uart_b && !uart_b)\n            || (odrv.config_.enable_uart_c && !uart_c);\n\n    // Init board-specific peripherals\n    if (!board_init()) {\n        for (;;); // TODO: handle properly\n    }\n\n    // Init GPIOs according to their configured mode\n    for (size_t i = 0; i < GPIO_COUNT; ++i) {\n        // Skip unavailable GPIOs\n        if (!get_gpio(i)) {\n            continue;\n        }\n\n        ODriveIntf::GpioMode mode = odrv.config_.gpio_modes[i];\n\n        GPIO_InitTypeDef GPIO_InitStruct;\n        GPIO_InitStruct.Pin = get_gpio(i).pin_mask_;\n\n        // Set Alternate Function setting for this GPIO mode\n        if (mode == ODriveIntf::GPIO_MODE_DIGITAL ||\n            mode == ODriveIntf::GPIO_MODE_DIGITAL_PULL_UP ||\n            mode == ODriveIntf::GPIO_MODE_DIGITAL_PULL_DOWN ||\n            mode == ODriveIntf::GPIO_MODE_MECH_BRAKE ||\n            mode == ODriveIntf::GPIO_MODE_STATUS ||\n            mode == ODriveIntf::GPIO_MODE_ANALOG_IN) {\n            GPIO_InitStruct.Alternate = 0;\n        } else {\n            auto it = std::find_if(\n                    alternate_functions[i].begin(), alternate_functions[i].end(),\n                    [mode](auto a) { return a.mode == mode; });\n\n            if (it == alternate_functions[i].end()) {\n                odrv.misconfigured_ = true; // this GPIO doesn't support the selected mode\n                continue;\n            }\n            GPIO_InitStruct.Alternate = it->alternate_function;\n        }\n\n        switch (mode) {\n            case ODriveIntf::GPIO_MODE_DIGITAL: {\n                GPIO_InitStruct.Mode = GPIO_MODE_INPUT;\n                GPIO_InitStruct.Pull = GPIO_NOPULL;\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n            } break;\n            case ODriveIntf::GPIO_MODE_DIGITAL_PULL_UP: {\n                GPIO_InitStruct.Mode = GPIO_MODE_INPUT;\n                GPIO_InitStruct.Pull = GPIO_PULLUP;\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n            } break;\n            case ODriveIntf::GPIO_MODE_DIGITAL_PULL_DOWN: {\n                GPIO_InitStruct.Mode = GPIO_MODE_INPUT;\n                GPIO_InitStruct.Pull = GPIO_PULLDOWN;\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n            } break;\n            case ODriveIntf::GPIO_MODE_ANALOG_IN: {\n                GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;\n                GPIO_InitStruct.Pull = GPIO_NOPULL;\n            } break;\n            case ODriveIntf::GPIO_MODE_UART_A: {\n                GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n                GPIO_InitStruct.Pull = (i == 0) ? GPIO_PULLDOWN : GPIO_PULLUP; // this is probably swapped but imitates old behavior\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;\n                if (!odrv.config_.enable_uart_a) {\n                    odrv.misconfigured_ = true;\n                }\n            } break;\n            case ODriveIntf::GPIO_MODE_UART_B: {\n                GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n                GPIO_InitStruct.Pull = (i == 0) ? GPIO_PULLDOWN : GPIO_PULLUP; // this is probably swapped but imitates old behavior\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;\n                if (!odrv.config_.enable_uart_b) {\n                    odrv.misconfigured_ = true;\n                }\n            } break;\n            case ODriveIntf::GPIO_MODE_UART_C: {\n                GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n                GPIO_InitStruct.Pull = (i == 0) ? GPIO_PULLDOWN : GPIO_PULLUP; // this is probably swapped but imitates old behavior\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;\n                if (!odrv.config_.enable_uart_c) {\n                    odrv.misconfigured_ = true;\n                }\n            } break;\n            case ODriveIntf::GPIO_MODE_CAN_A: {\n                GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n                GPIO_InitStruct.Pull = GPIO_NOPULL;\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;\n                if (!odrv.config_.enable_can_a) {\n                    odrv.misconfigured_ = true;\n                }\n            } break;\n            case ODriveIntf::GPIO_MODE_I2C_A: {\n                GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;\n                GPIO_InitStruct.Pull = GPIO_PULLUP;\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;\n                if (!odrv.config_.enable_i2c_a) {\n                    odrv.misconfigured_ = true;\n                }\n            } break;\n            //case ODriveIntf::GPIO_MODE_SPI_A: { // TODO\n            //} break;\n            case ODriveIntf::GPIO_MODE_PWM: {\n                GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n                GPIO_InitStruct.Pull = GPIO_PULLDOWN;\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n            } break;\n            case ODriveIntf::GPIO_MODE_ENC0: {\n                GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n                GPIO_InitStruct.Pull = GPIO_NOPULL;\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n            } break;\n            case ODriveIntf::GPIO_MODE_ENC1: {\n                GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n                GPIO_InitStruct.Pull = GPIO_NOPULL;\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n            } break;\n            case ODriveIntf::GPIO_MODE_ENC2: {\n                GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n                GPIO_InitStruct.Pull = GPIO_NOPULL;\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n            } break;\n            case ODriveIntf::GPIO_MODE_MECH_BRAKE: {\n                GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;\n                GPIO_InitStruct.Pull = GPIO_NOPULL;\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n            } break;\n            case ODriveIntf::GPIO_MODE_STATUS: {\n                GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;\n                GPIO_InitStruct.Pull = GPIO_NOPULL;\n                GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n            } break;\n            default: {\n                odrv.misconfigured_ = true;\n                continue;\n            }\n        }\n\n        HAL_GPIO_Init(get_gpio(i).port_, &GPIO_InitStruct);\n    }\n\n    // Init usb irq binary semaphore, and start with no tokens by removing the starting one.\n    osSemaphoreDef(sem_usb_irq);\n    sem_usb_irq = osSemaphoreCreate(osSemaphore(sem_usb_irq), 1);\n    osSemaphoreWait(sem_usb_irq, 0);\n\n    // Create an event queue for UART\n    osMessageQDef(uart_event_queue, 4, uint32_t);\n    uart_event_queue = osMessageCreate(osMessageQ(uart_event_queue), NULL);\n\n    // Create an event queue for USB\n    osMessageQDef(usb_event_queue, 7, uint32_t);\n    usb_event_queue = osMessageCreate(osMessageQ(usb_event_queue), NULL);\n\n    osSemaphoreDef(sem_can);\n    sem_can = osSemaphoreCreate(osSemaphore(sem_can), 1);\n    osSemaphoreWait(sem_can, 0);\n\n    // Create main thread\n    osThreadDef(defaultTask, rtos_main, osPriorityNormal, 0, stack_size_default_task / sizeof(StackType_t));\n    defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);\n\n    // Start scheduler\n    osKernelStart();\n    \n    for (;;);\n}\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/MotorControl/main.cpp b/MotorControl/main.cpp
+--- a/MotorControl/main.cpp	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ b/MotorControl/main.cpp	(date 1776762148852)
+@@ -224,13 +224,7 @@
+ }
+ 
+ uint64_t ODrive::get_drv_fault() {
+-#if AXIS_COUNT == 1
+     return motors[0].gate_driver_.get_error();
+-#elif AXIS_COUNT == 2
+-    return (uint64_t)motors[0].gate_driver_.get_error() | ((uint64_t)motors[1].gate_driver_.get_error() << 32ULL);
+-#else
+-    #error "not supported"
+-#endif
+ }
+ 
+ void ODrive::clear_errors() {
+@@ -263,7 +257,7 @@
+         odrv.system_stats_.uptime = xTaskGetTickCount();
+         odrv.system_stats_.min_heap_space = xPortGetMinimumEverFreeHeapSize();
+ 
+-        uint32_t min_stack_space[AXIS_COUNT];
++        uint32_t min_stack_space;
+         std::transform(axes.begin(), axes.end(), std::begin(min_stack_space), [](auto& axis) { return uxTaskGetStackHighWaterMark(axis.thread_id_) * sizeof(StackType_t); });
+         odrv.system_stats_.max_stack_usage_axis = axes[0].stack_size_ - *std::min_element(std::begin(min_stack_space), std::end(min_stack_space));
+         odrv.system_stats_.max_stack_usage_usb = stack_size_usb_thread - uxTaskGetStackHighWaterMark(usb_thread) * sizeof(StackType_t);
+Index: Board/v3/board.cpp
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>/*\n* @brief Contains board specific variables and initialization functions\n*/\n\n#include <board.h>\n\n#include <odrive_main.h>\n#include <low_level.h>\n\n#include <Drivers/STM32/stm32_timer.hpp>\n\n#include <adc.h>\n#include <dma.h>\n#include <tim.h>\n#include <usart.h>\n#include <freertos_vars.h>\n\n// this should technically be in task_timer.cpp but let's not make a one-line file\nbool TaskTimer::enabled = false;\n\nextern \"C\" void SystemClock_Config(void); // defined in main.c generated by CubeMX\n\n#define ControlLoop_IRQHandler OTG_HS_IRQHandler\n#define ControlLoop_IRQn OTG_HS_IRQn\n\n// This array is placed at the very start of the ram (0x20000000) and will be\n// used during manufacturing to test the struct that will go to the OTP before\n// _actually_ putting anything into OTP. This avoids bulk-destroying STM32's if\n// we introduce unintended breakage in our manufacturing scripts.\nuint8_t __attribute__((section(\".testdata\"))) fake_otp[FLASH_OTP_END + 1 - FLASH_OTP_BASE] = {0, 0, 0, HW_VERSION_MAJOR, HW_VERSION_MINOR, HW_VERSION_VOLTAGE};\n\nStm32SpiArbiter spi3_arbiter{&hspi3};\nStm32SpiArbiter& ext_spi_arbiter = spi3_arbiter;\n\nUART_HandleTypeDef* uart_a = &huart4;\nUART_HandleTypeDef* uart_b = &huart2; // TODO: this could be supported in ODrive v3.6 (or similar) using STM32's USART2\nUART_HandleTypeDef* uart_c = nullptr;\n\nDrv8301 m0_gate_driver{\n    &spi3_arbiter,\n    {M0_nCS_GPIO_Port, M0_nCS_Pin}, // nCS\n    {}, // EN pin (shared between both motors, therefore we actuate it outside of the drv8301 driver)\n    {nFAULT_GPIO_Port, nFAULT_Pin} // nFAULT pin (shared between both motors)\n};\n\nDrv8301 m1_gate_driver{\n    &spi3_arbiter,\n    {M1_nCS_GPIO_Port, M1_nCS_Pin}, // nCS\n    {}, // EN pin (shared between both motors, therefore we actuate it outside of the drv8301 driver)\n    {nFAULT_GPIO_Port, nFAULT_Pin} // nFAULT pin (shared between both motors)\n};\n\nconst float fet_thermistor_poly_coeffs[] =\n    {363.93910201f, -462.15369634f, 307.55129571f, -27.72569531f};\nconst size_t fet_thermistor_num_coeffs = sizeof(fet_thermistor_poly_coeffs)/sizeof(fet_thermistor_poly_coeffs[1]);\n\nOnboardThermistorCurrentLimiter fet_thermistors[AXIS_COUNT] = {\n    {\n        M0_THERMISTOR_ADC_CHANNEL, // adc_channel\n        &fet_thermistor_poly_coeffs[0], // coefficients\n        fet_thermistor_num_coeffs // num_coeffs\n    }, {\n        M1_THERMISTOR_ADC_CHANNEL, // adc_channel\n        &fet_thermistor_poly_coeffs[0], // coefficients\n        fet_thermistor_num_coeffs // num_coeffs\n    }\n};\n\nOffboardThermistorCurrentLimiter motor_thermistors[AXIS_COUNT];\n\nMotor motors[AXIS_COUNT] = {\n    {\n        &htim1, // timer\n        0b110, // current_sensor_mask\n        1.0f / SHUNT_RESISTANCE, // shunt_conductance [S]\n        m0_gate_driver, // gate_driver\n        m0_gate_driver, // opamp\n        fet_thermistors[0],\n        motor_thermistors[0]\n    },\n    {\n        &htim8, // timer\n        0b110, // current_sensor_mask\n        1.0f / SHUNT_RESISTANCE, // shunt_conductance [S]\n        m1_gate_driver, // gate_driver\n        m1_gate_driver, // opamp\n        fet_thermistors[1],\n        motor_thermistors[1]\n    }\n};\n\nEncoder encoders[AXIS_COUNT] = {\n    {\n        &htim3, // timer\n        {M0_ENC_Z_GPIO_Port, M0_ENC_Z_Pin}, // index_gpio\n        {M0_ENC_A_GPIO_Port, M0_ENC_A_Pin}, // hallA_gpio\n        {M0_ENC_B_GPIO_Port, M0_ENC_B_Pin}, // hallB_gpio\n        {M0_ENC_Z_GPIO_Port, M0_ENC_Z_Pin}, // hallC_gpio\n        &spi3_arbiter // spi_arbiter\n    },\n    {\n        &htim4, // timer\n        {M1_ENC_Z_GPIO_Port, M1_ENC_Z_Pin}, // index_gpio\n        {M1_ENC_A_GPIO_Port, M1_ENC_A_Pin}, // hallA_gpio\n        {M1_ENC_B_GPIO_Port, M1_ENC_B_Pin}, // hallB_gpio\n        {M1_ENC_Z_GPIO_Port, M1_ENC_Z_Pin}, // hallC_gpio\n        &spi3_arbiter // spi_arbiter\n    }\n};\n\n// TODO: this has no hardware dependency and should be allocated depending on config\nEndstop endstops[2 * AXIS_COUNT];\nMechanicalBrake mechanical_brakes[AXIS_COUNT];\n\nSensorlessEstimator sensorless_estimators[AXIS_COUNT];\nController controllers[AXIS_COUNT];\nTrapezoidalTrajectory trap[AXIS_COUNT];\n\nstd::array<Axis, AXIS_COUNT> axes{{\n    {\n        0, // axis_num\n        M0_STEP_GPIO_PIN, // step_gpio_pin\n        M0_DIR_GPIO_PIN, // dir_gpio_pin\n        (osPriority)(osPriorityHigh + (osPriority)1), // thread_priority\n        encoders[0], // encoder\n        sensorless_estimators[0], // sensorless_estimator\n        controllers[0], // controller\n        motors[0], // motor\n        trap[0], // trap\n        endstops[0], endstops[1], // min_endstop, max_endstop\n        mechanical_brakes[0], // mechanical brake\n    },\n    {\n        1, // axis_num\n        M1_STEP_GPIO_PIN, // step_gpio_pin\n        M1_DIR_GPIO_PIN, // dir_gpio_pin\n        osPriorityHigh, // thread_priority\n        encoders[1], // encoder\n        sensorless_estimators[1], // sensorless_estimator\n        controllers[1], // controller\n        motors[1], // motor\n        trap[1], // trap\n        endstops[2], endstops[3], // min_endstop, max_endstop\n        mechanical_brakes[1], // mechanical brake\n    },\n}};\n\n\n\nStm32Gpio gpios[GPIO_COUNT] = BOARD_GPIOS;\n\nstd::array<GpioFunction, 3> alternate_functions[GPIO_COUNT] = BOARD_ALTERANATE_FUNCTIONS;\n\nPwmInput pwm0_input{&htim5, PWM0_CHANNELS};\n\nextern USBD_HandleTypeDef hUsbDeviceFS;\nUSBD_HandleTypeDef& usb_dev_handle = hUsbDeviceFS;\n\nbool check_board_version(const uint8_t* otp_ptr) {\n    return (otp_ptr[3] == HW_VERSION_MAJOR) &&\n           (otp_ptr[4] == HW_VERSION_MINOR) &&\n           (otp_ptr[5] == HW_VERSION_VOLTAGE);\n}\n\nvoid system_init() {\n    // Reset of all peripherals, Initializes the Flash interface and the Systick.\n    HAL_Init();\n\n    // Configure the system clock\n    SystemClock_Config();\n\n    // If the OTP is pristine, use the fake-otp in RAM instead\n    const uint8_t* otp_ptr = (const uint8_t*)FLASH_OTP_BASE;\n    if (*otp_ptr == 0xff) {\n        otp_ptr = fake_otp;\n    }\n\n    // Ensure that the board version for which this firmware is compiled matches\n    // the board we're running on.\n    if (!check_board_version(otp_ptr)) {\n        for (;;);\n    }\n}\n\nbool board_init() {\n    // Initialize all configured peripherals\n    MX_GPIO_Init();\n    MX_DMA_Init();\n    MX_ADC1_Init();\n    MX_ADC2_Init();\n    MX_TIM1_Init();\n    MX_TIM8_Init();\n    MX_TIM3_Init();\n    MX_TIM4_Init();\n    MX_SPI3_Init();\n    MX_ADC3_Init();\n    MX_TIM2_Init();\n    MX_TIM5_Init();\n    MX_TIM13_Init();\n\n    // External interrupt lines are individually enabled in stm32_gpio.cpp\n    HAL_NVIC_SetPriority(EXTI0_IRQn, 1, 0);\n    HAL_NVIC_EnableIRQ(EXTI0_IRQn);\n    HAL_NVIC_SetPriority(EXTI1_IRQn, 1, 0);\n    HAL_NVIC_EnableIRQ(EXTI1_IRQn);\n    HAL_NVIC_SetPriority(EXTI2_IRQn, 1, 0);\n    HAL_NVIC_EnableIRQ(EXTI2_IRQn);\n    HAL_NVIC_SetPriority(EXTI3_IRQn, 1, 0);\n    HAL_NVIC_EnableIRQ(EXTI3_IRQn);\n    HAL_NVIC_SetPriority(EXTI4_IRQn, 1, 0);\n    HAL_NVIC_EnableIRQ(EXTI4_IRQn);\n    HAL_NVIC_SetPriority(EXTI9_5_IRQn, 1, 0);\n    HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);\n    HAL_NVIC_SetPriority(EXTI15_10_IRQn, 1, 0);\n    HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);\n\n    HAL_NVIC_SetPriority(ControlLoop_IRQn, 5, 0);\n    HAL_NVIC_EnableIRQ(ControlLoop_IRQn);\n\n    HAL_NVIC_SetPriority(TIM8_UP_TIM13_IRQn, 0, 0);\n    HAL_NVIC_EnableIRQ(TIM8_UP_TIM13_IRQn);\n\n    if (odrv.config_.enable_uart_a) {\n        uart_a->Init.BaudRate = odrv.config_.uart_a_baudrate;\n        MX_UART4_Init();\n    }\n\n    if (odrv.config_.enable_uart_b) {\n        uart_b->Init.BaudRate = odrv.config_.uart_b_baudrate;\n        MX_USART2_UART_Init();\n    }\n\n    if (odrv.config_.enable_i2c_a) {\n        // Set up the direction GPIO as input\n        get_gpio(3).config(GPIO_MODE_INPUT, GPIO_PULLUP);\n        get_gpio(4).config(GPIO_MODE_INPUT, GPIO_PULLUP);\n        get_gpio(5).config(GPIO_MODE_INPUT, GPIO_PULLUP);\n\n        osDelay(1); // This has no effect but was here before.\n        i2c_stats_.addr = (0xD << 3);\n        i2c_stats_.addr |= get_gpio(3).read() ? 0x1 : 0;\n        i2c_stats_.addr |= get_gpio(4).read() ? 0x2 : 0;\n        i2c_stats_.addr |= get_gpio(5).read() ? 0x4 : 0;\n        MX_I2C1_Init(i2c_stats_.addr);\n    }\n\n    if (odrv.config_.enable_can_a) {\n        // The CAN initialization will (and must) init its own GPIOs before the\n        // GPIO modes are initialized. Therefore we ensure that the later GPIO\n        // mode initialization won't override the CAN mode.\n        if (odrv.config_.gpio_modes[15] != ODriveIntf::GPIO_MODE_CAN_A || odrv.config_.gpio_modes[16] != ODriveIntf::GPIO_MODE_CAN_A) {\n            odrv.misconfigured_ = true;\n        }\n    }\n\n    // Ensure that debug halting of the core doesn't leave the motor PWM running\n    __HAL_DBGMCU_FREEZE_TIM1();\n    __HAL_DBGMCU_FREEZE_TIM8();\n    __HAL_DBGMCU_FREEZE_TIM13();\n\n    Stm32Gpio drv_enable_gpio = {EN_GATE_GPIO_Port, EN_GATE_Pin};\n\n    // Reset both DRV chips. The enable pin also controls the SPI interface, not\n    // only the driver stages.\n    drv_enable_gpio.write(false);\n    delay_us(40); // mimumum pull-down time for full reset: 20us\n    drv_enable_gpio.write(true);\n    delay_us(20000); // mimumum pull-down time for full reset: 20us\n\n    return true;\n}\n\nvoid start_timers() {\n    CRITICAL_SECTION() {\n        // Temporarily disable ADC triggers so they don't trigger as a side\n        // effect of starting the timers.\n        hadc1.Instance->CR2 &= ~(ADC_CR2_JEXTEN);\n        hadc2.Instance->CR2 &= ~(ADC_CR2_EXTEN | ADC_CR2_JEXTEN);\n        hadc3.Instance->CR2 &= ~(ADC_CR2_EXTEN | ADC_CR2_JEXTEN);\n\n        /*\n        * Synchronize TIM1, TIM8 and TIM13 such that:\n        *  1. The triangle waveform of TIM1 leads the triangle waveform of TIM8 by a\n        *     90° phase shift.\n        *  2. Each TIM13 reload coincides with a TIM1 lower update event.\n        */\n        Stm32Timer::start_synchronously<3>(\n            {&htim1, &htim8, &htim13},\n            {TIM1_INIT_COUNT, 0, TIM1_INIT_COUNT / 2 /* TIM13 is on a clock that's only have as fast as TIM1 */}\n        );\n\n        hadc1.Instance->CR2 |= (ADC_EXTERNALTRIGINJECCONVEDGE_RISING);\n        hadc2.Instance->CR2 |= (ADC_EXTERNALTRIGCONVEDGE_RISING | ADC_EXTERNALTRIGINJECCONVEDGE_RISING);\n        hadc3.Instance->CR2 |= (ADC_EXTERNALTRIGCONVEDGE_RISING | ADC_EXTERNALTRIGINJECCONVEDGE_RISING);\n\n        __HAL_ADC_CLEAR_FLAG(&hadc1, ADC_FLAG_JEOC);\n        __HAL_ADC_CLEAR_FLAG(&hadc2, ADC_FLAG_JEOC);\n        __HAL_ADC_CLEAR_FLAG(&hadc3, ADC_FLAG_JEOC);\n        __HAL_ADC_CLEAR_FLAG(&hadc1, ADC_FLAG_EOC);\n        __HAL_ADC_CLEAR_FLAG(&hadc2, ADC_FLAG_EOC);\n        __HAL_ADC_CLEAR_FLAG(&hadc3, ADC_FLAG_EOC);\n        __HAL_ADC_CLEAR_FLAG(&hadc1, ADC_FLAG_OVR);\n        __HAL_ADC_CLEAR_FLAG(&hadc2, ADC_FLAG_OVR);\n        __HAL_ADC_CLEAR_FLAG(&hadc3, ADC_FLAG_OVR);\n        \n        __HAL_TIM_CLEAR_IT(&htim8, TIM_IT_UPDATE);\n        __HAL_TIM_ENABLE_IT(&htim8, TIM_IT_UPDATE);\n    }\n}\n\nstatic bool fetch_and_reset_adcs(\n        std::optional<Iph_ABC_t>* current0,\n        std::optional<Iph_ABC_t>* current1) {\n    bool all_adcs_done = (ADC1->SR & ADC_SR_JEOC) == ADC_SR_JEOC\n        && (ADC2->SR & (ADC_SR_EOC | ADC_SR_JEOC)) == (ADC_SR_EOC | ADC_SR_JEOC)\n        && (ADC3->SR & (ADC_SR_EOC | ADC_SR_JEOC)) == (ADC_SR_EOC | ADC_SR_JEOC);\n    if (!all_adcs_done) {\n        return false;\n    }\n\n    vbus_sense_adc_cb(ADC1->JDR1);\n\n    if (m0_gate_driver.is_ready()) {\n        std::optional<float> phB = motors[0].phase_current_from_adcval(ADC2->JDR1);\n        std::optional<float> phC = motors[0].phase_current_from_adcval(ADC3->JDR1);\n        if (phB.has_value() && phC.has_value()) {\n            *current0 = {-*phB - *phC, *phB, *phC};\n        }\n    }\n\n    if (m1_gate_driver.is_ready()) {\n        std::optional<float> phB = motors[1].phase_current_from_adcval(ADC2->DR);\n        std::optional<float> phC = motors[1].phase_current_from_adcval(ADC3->DR);\n        if (phB.has_value() && phC.has_value()) {\n            *current1 = {-*phB - *phC, *phB, *phC};\n        }\n    }\n    \n    ADC1->SR = ~(ADC_SR_JEOC);\n    ADC2->SR = ~(ADC_SR_EOC | ADC_SR_JEOC | ADC_SR_OVR);\n    ADC3->SR = ~(ADC_SR_EOC | ADC_SR_JEOC | ADC_SR_OVR);\n\n    return true;\n}\n\nextern \"C\" {\n\nvoid HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {\n    HAL_SPI_TxRxCpltCallback(hspi);\n}\n\nvoid HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {\n    HAL_SPI_TxRxCpltCallback(hspi);\n}\n\nvoid HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {\n    if (hspi == &hspi3) {\n        spi3_arbiter.on_complete();\n    }\n}\n\nvoid TIM5_IRQHandler(void) {\n    COUNT_IRQ(TIM5_IRQn);\n    pwm0_input.on_capture();\n}\n\nvolatile uint32_t timestamp_ = 0;\nvolatile bool counting_down_ = false;\n\nvoid TIM8_UP_TIM13_IRQHandler(void) {\n    COUNT_IRQ(TIM8_UP_TIM13_IRQn);\n    \n    // Entry into this function happens at 21-23 clock cycles after the timer\n    // update event.\n    __HAL_TIM_CLEAR_IT(&htim8, TIM_IT_UPDATE);\n\n    // If the corresponding timer is counting up, we just sampled in SVM vector 0, i.e. real current\n    // If we are counting down, we just sampled in SVM vector 7, with zero current\n    bool counting_down = TIM8->CR1 & TIM_CR1_DIR;\n\n    bool timer_update_missed = (counting_down_ == counting_down);\n    if (timer_update_missed) {\n        motors[0].disarm_with_error(Motor::ERROR_TIMER_UPDATE_MISSED);\n        motors[1].disarm_with_error(Motor::ERROR_TIMER_UPDATE_MISSED);\n        return;\n    }\n    counting_down_ = counting_down;\n\n    timestamp_ += TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1);\n\n    if (!counting_down) {\n        TaskTimer::enabled = odrv.task_timers_armed_;\n        // Run sampling handlers and kick off control tasks when TIM8 is\n        // counting up.\n        odrv.sampling_cb();\n        NVIC->STIR = ControlLoop_IRQn;\n    } else {\n        // Tentatively reset all PWM outputs to 50% duty cycles. If the control\n        // loop handler finishes in time then these values will be overridden\n        // before they go into effect.\n        TIM1->CCR1 =\n        TIM1->CCR2 =\n        TIM1->CCR3 =\n        TIM8->CCR1 =\n        TIM8->CCR2 =\n        TIM8->CCR3 =\n            TIM_1_8_PERIOD_CLOCKS / 2;\n    }\n}\n\nvoid ControlLoop_IRQHandler(void) {\n    COUNT_IRQ(ControlLoop_IRQn);\n    uint32_t timestamp = timestamp_;\n\n    // Ensure that all the ADCs are done\n    std::optional<Iph_ABC_t> current0;\n    std::optional<Iph_ABC_t> current1;\n\n    if (!fetch_and_reset_adcs(&current0, &current1)) {\n        motors[0].disarm_with_error(Motor::ERROR_BAD_TIMING);\n        motors[1].disarm_with_error(Motor::ERROR_BAD_TIMING);\n    }\n\n    // If the motor FETs are not switching then we can't measure the current\n    // because for this we need the low side FET to conduct.\n    // So for now we guess the current to be 0 (this is not correct shortly after\n    // disarming and when the motor spins fast in idle). Passing an invalid\n    // current reading would create problems with starting FOC.\n    if (!(TIM1->BDTR & TIM_BDTR_MOE_Msk)) {\n        current0 = {0.0f, 0.0f};\n    }\n    if (!(TIM8->BDTR & TIM_BDTR_MOE_Msk)) {\n        current1 = {0.0f, 0.0f};\n    }\n\n    motors[0].current_meas_cb(timestamp - TIM1_INIT_COUNT, current0);\n    motors[1].current_meas_cb(timestamp, current1);\n\n    odrv.control_loop_cb(timestamp);\n\n    // By this time the ADCs for both M0 and M1 should have fired again. But\n    // let's wait for them just to be sure.\n    MEASURE_TIME(odrv.task_times_.dc_calib_wait) {\n        while (!(ADC2->SR & ADC_SR_EOC));\n    }\n\n    if (!fetch_and_reset_adcs(&current0, &current1)) {\n        motors[0].disarm_with_error(Motor::ERROR_BAD_TIMING);\n        motors[1].disarm_with_error(Motor::ERROR_BAD_TIMING);\n    }\n\n    motors[0].dc_calib_cb(timestamp + TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1) - TIM1_INIT_COUNT, current0);\n    motors[1].dc_calib_cb(timestamp + TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1), current1);\n\n    motors[0].pwm_update_cb(timestamp + 3 * TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1) - TIM1_INIT_COUNT);\n    motors[1].pwm_update_cb(timestamp + 3 * TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1));\n\n    // If we did everything right, the TIM8 update handler should have been\n    // called exactly once between the start of this function and now.\n\n    if (timestamp_ != timestamp + TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1)) {\n        motors[0].disarm_with_error(Motor::ERROR_CONTROL_DEADLINE_MISSED);\n        motors[1].disarm_with_error(Motor::ERROR_CONTROL_DEADLINE_MISSED);\n    }\n\n    odrv.task_timers_armed_ = odrv.task_timers_armed_ && !TaskTimer::enabled;\n    TaskTimer::enabled = false;\n}\n\nvoid I2C1_EV_IRQHandler(void) {\n    COUNT_IRQ(I2C1_EV_IRQn);\n    HAL_I2C_EV_IRQHandler(&hi2c1);\n}\n\nvoid I2C1_ER_IRQHandler(void) {\n    COUNT_IRQ(I2C1_ER_IRQn);\n    HAL_I2C_ER_IRQHandler(&hi2c1);\n}\n\nextern PCD_HandleTypeDef hpcd_USB_OTG_FS; // defined in usbd_conf.c\nvoid OTG_FS_IRQHandler(void) {\n    COUNT_IRQ(OTG_FS_IRQn);\n    HAL_PCD_IRQHandler(&hpcd_USB_OTG_FS);\n}\n\n}\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/Board/v3/board.cpp b/Board/v3/board.cpp
+--- a/Board/v3/board.cpp	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ b/Board/v3/board.cpp	(date 1776762431809)
+@@ -43,53 +43,30 @@
+     {nFAULT_GPIO_Port, nFAULT_Pin} // nFAULT pin (shared between both motors)
+ };
+ 
+-Drv8301 m1_gate_driver{
+-    &spi3_arbiter,
+-    {M1_nCS_GPIO_Port, M1_nCS_Pin}, // nCS
+-    {}, // EN pin (shared between both motors, therefore we actuate it outside of the drv8301 driver)
+-    {nFAULT_GPIO_Port, nFAULT_Pin} // nFAULT pin (shared between both motors)
+-};
+ 
+ const float fet_thermistor_poly_coeffs[] =
+     {363.93910201f, -462.15369634f, 307.55129571f, -27.72569531f};
+ const size_t fet_thermistor_num_coeffs = sizeof(fet_thermistor_poly_coeffs)/sizeof(fet_thermistor_poly_coeffs[1]);
+ 
+-OnboardThermistorCurrentLimiter fet_thermistors[AXIS_COUNT] = {
+-    {
++OnboardThermistorCurrentLimiter fet_thermistor = {
+         M0_THERMISTOR_ADC_CHANNEL, // adc_channel
+         &fet_thermistor_poly_coeffs[0], // coefficients
+         fet_thermistor_num_coeffs // num_coeffs
+-    }, {
+-        M1_THERMISTOR_ADC_CHANNEL, // adc_channel
+-        &fet_thermistor_poly_coeffs[0], // coefficients
+-        fet_thermistor_num_coeffs // num_coeffs
+-    }
+ };
+ 
+-OffboardThermistorCurrentLimiter motor_thermistors[AXIS_COUNT];
++OffboardThermistorCurrentLimiter motor_thermistor{};
+ 
+-Motor motors[AXIS_COUNT] = {
+-    {
++Motor motor = {
+         &htim1, // timer
+         0b110, // current_sensor_mask
+         1.0f / SHUNT_RESISTANCE, // shunt_conductance [S]
+         m0_gate_driver, // gate_driver
+         m0_gate_driver, // opamp
+-        fet_thermistors[0],
+-        motor_thermistors[0]
+-    },
+-    {
+-        &htim8, // timer
+-        0b110, // current_sensor_mask
+-        1.0f / SHUNT_RESISTANCE, // shunt_conductance [S]
+-        m1_gate_driver, // gate_driver
+-        m1_gate_driver, // opamp
+-        fet_thermistors[1],
+-        motor_thermistors[1]
+-    }
++        fet_thermistor,
++        motor_thermistor
+ };
+ 
+-Encoder encoders[AXIS_COUNT] = {
++Encoder encoder =
+     {
+         &htim3, // timer
+         {M0_ENC_Z_GPIO_Port, M0_ENC_Z_Pin}, // index_gpio
+@@ -97,53 +74,31 @@
+         {M0_ENC_B_GPIO_Port, M0_ENC_B_Pin}, // hallB_gpio
+         {M0_ENC_Z_GPIO_Port, M0_ENC_Z_Pin}, // hallC_gpio
+         &spi3_arbiter // spi_arbiter
+-    },
+-    {
+-        &htim4, // timer
+-        {M1_ENC_Z_GPIO_Port, M1_ENC_Z_Pin}, // index_gpio
+-        {M1_ENC_A_GPIO_Port, M1_ENC_A_Pin}, // hallA_gpio
+-        {M1_ENC_B_GPIO_Port, M1_ENC_B_Pin}, // hallB_gpio
+-        {M1_ENC_Z_GPIO_Port, M1_ENC_Z_Pin}, // hallC_gpio
+-        &spi3_arbiter // spi_arbiter
+-    }
+-};
++    };
++
+ 
+ // TODO: this has no hardware dependency and should be allocated depending on config
+-Endstop endstops[2 * AXIS_COUNT];
+-MechanicalBrake mechanical_brakes[AXIS_COUNT];
++Endstop endstops[2];
++MechanicalBrake mechanical_brake;
+ 
+-SensorlessEstimator sensorless_estimators[AXIS_COUNT];
+-Controller controllers[AXIS_COUNT];
+-TrapezoidalTrajectory trap[AXIS_COUNT];
++SensorlessEstimator sensorless_estimator;
++Controller controller;
++TrapezoidalTrajectory trap;
+ 
+-std::array<Axis, AXIS_COUNT> axes{{
++Axis axis
+     {
+         0, // axis_num
+         M0_STEP_GPIO_PIN, // step_gpio_pin
+         M0_DIR_GPIO_PIN, // dir_gpio_pin
+         (osPriority)(osPriorityHigh + (osPriority)1), // thread_priority
+-        encoders[0], // encoder
+-        sensorless_estimators[0], // sensorless_estimator
+-        controllers[0], // controller
+-        motors[0], // motor
+-        trap[0], // trap
++        encoder, // encoder
++        sensorless_estimator, // sensorless_estimator
++        controller, // controller
++        motor, // motor
++        trap, // trap
+         endstops[0], endstops[1], // min_endstop, max_endstop
+-        mechanical_brakes[0], // mechanical brake
+-    },
+-    {
+-        1, // axis_num
+-        M1_STEP_GPIO_PIN, // step_gpio_pin
+-        M1_DIR_GPIO_PIN, // dir_gpio_pin
+-        osPriorityHigh, // thread_priority
+-        encoders[1], // encoder
+-        sensorless_estimators[1], // sensorless_estimator
+-        controllers[1], // controller
+-        motors[1], // motor
+-        trap[1], // trap
+-        endstops[2], endstops[3], // min_endstop, max_endstop
+-        mechanical_brakes[1], // mechanical brake
+-    },
+-}};
++        mechanical_brake, // mechanical brake
++    };
+ 
+ 
+ 
+@@ -189,9 +144,7 @@
+     MX_ADC1_Init();
+     MX_ADC2_Init();
+     MX_TIM1_Init();
+-    MX_TIM8_Init();
+     MX_TIM3_Init();
+-    MX_TIM4_Init();
+     MX_SPI3_Init();
+     MX_ADC3_Init();
+     MX_TIM2_Init();
+@@ -285,8 +238,8 @@
+         *  2. Each TIM13 reload coincides with a TIM1 lower update event.
+         */
+         Stm32Timer::start_synchronously<3>(
+-            {&htim1, &htim8, &htim13},
+-            {TIM1_INIT_COUNT, 0, TIM1_INIT_COUNT / 2 /* TIM13 is on a clock that's only have as fast as TIM1 */}
++            {&htim1, &htim13},
++            {TIM1_INIT_COUNT, TIM1_INIT_COUNT / 2 /* TIM13 is on a clock that's only have as fast as TIM1 */}
+         );
+ 
+         hadc1.Instance->CR2 |= (ADC_EXTERNALTRIGINJECCONVEDGE_RISING);
+@@ -302,9 +255,6 @@
+         __HAL_ADC_CLEAR_FLAG(&hadc1, ADC_FLAG_OVR);
+         __HAL_ADC_CLEAR_FLAG(&hadc2, ADC_FLAG_OVR);
+         __HAL_ADC_CLEAR_FLAG(&hadc3, ADC_FLAG_OVR);
+-        
+-        __HAL_TIM_CLEAR_IT(&htim8, TIM_IT_UPDATE);
+-        __HAL_TIM_ENABLE_IT(&htim8, TIM_IT_UPDATE);
+     }
+ }
+ 
+@@ -321,20 +271,13 @@
+     vbus_sense_adc_cb(ADC1->JDR1);
+ 
+     if (m0_gate_driver.is_ready()) {
+-        std::optional<float> phB = motors[0].phase_current_from_adcval(ADC2->JDR1);
+-        std::optional<float> phC = motors[0].phase_current_from_adcval(ADC3->JDR1);
++        std::optional<float> phB = motor.phase_current_from_adcval(ADC2->JDR1);
++        std::optional<float> phC = motor.phase_current_from_adcval(ADC3->JDR1);
+         if (phB.has_value() && phC.has_value()) {
+             *current0 = {-*phB - *phC, *phB, *phC};
+         }
+     }
+ 
+-    if (m1_gate_driver.is_ready()) {
+-        std::optional<float> phB = motors[1].phase_current_from_adcval(ADC2->DR);
+-        std::optional<float> phC = motors[1].phase_current_from_adcval(ADC3->DR);
+-        if (phB.has_value() && phC.has_value()) {
+-            *current1 = {-*phB - *phC, *phB, *phC};
+-        }
+-    }
+     
+     ADC1->SR = ~(ADC_SR_JEOC);
+     ADC2->SR = ~(ADC_SR_EOC | ADC_SR_JEOC | ADC_SR_OVR);
+@@ -380,8 +323,8 @@
+ 
+     bool timer_update_missed = (counting_down_ == counting_down);
+     if (timer_update_missed) {
+-        motors[0].disarm_with_error(Motor::ERROR_TIMER_UPDATE_MISSED);
+-        motors[1].disarm_with_error(Motor::ERROR_TIMER_UPDATE_MISSED);
++        motor.disarm_with_error(Motor::ERROR_TIMER_UPDATE_MISSED);
++        motor.disarm_with_error(Motor::ERROR_TIMER_UPDATE_MISSED);
+         return;
+     }
+     counting_down_ = counting_down;
+Index: Board/v3/Src/tim.c
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>/**\n  ******************************************************************************\n  * File Name          : TIM.c\n  * Description        : This file provides code for the configuration\n  *                      of the TIM instances.\n  ******************************************************************************\n  * This notice applies to any and all portions of this file\n  * that are not between comment pairs USER CODE BEGIN and\n  * USER CODE END. Other portions of this file, whether \n  * inserted by the user or by software development tools\n  * are owned by their respective copyright owners.\n  *\n  * Copyright (c) 2018 STMicroelectronics International N.V. \n  * All rights reserved.\n  *\n  * Redistribution and use in source and binary forms, with or without \n  * modification, are permitted, provided that the following conditions are met:\n  *\n  * 1. Redistribution of source code must retain the above copyright notice, \n  *    this list of conditions and the following disclaimer.\n  * 2. Redistributions in binary form must reproduce the above copyright notice,\n  *    this list of conditions and the following disclaimer in the documentation\n  *    and/or other materials provided with the distribution.\n  * 3. Neither the name of STMicroelectronics nor the names of other \n  *    contributors to this software may be used to endorse or promote products \n  *    derived from this software without specific written permission.\n  * 4. This software, including modifications and/or derivative works of this \n  *    software, must execute solely and exclusively on microcontroller or\n  *    microprocessor devices manufactured by or for STMicroelectronics.\n  * 5. Redistribution and use of this software other than as permitted under \n  *    this license is void and will automatically terminate your rights under \n  *    this license. \n  *\n  * THIS SOFTWARE IS PROVIDED BY STMICROELECTRONICS AND CONTRIBUTORS \"AS IS\" \n  * AND ANY EXPRESS, IMPLIED OR STATUTORY WARRANTIES, INCLUDING, BUT NOT \n  * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A \n  * PARTICULAR PURPOSE AND NON-INFRINGEMENT OF THIRD PARTY INTELLECTUAL PROPERTY\n  * RIGHTS ARE DISCLAIMED TO THE FULLEST EXTENT PERMITTED BY LAW. IN NO EVENT \n  * SHALL STMICROELECTRONICS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,\n  * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT\n  * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, \n  * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF \n  * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING \n  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,\n  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n  *\n  ******************************************************************************\n  */\n\n/* Includes ------------------------------------------------------------------*/\n#include \"tim.h\"\n\n#include \"gpio.h\"\n\n/* USER CODE BEGIN 0 */\n\n/* USER CODE END 0 */\n\nTIM_HandleTypeDef htim1;\nTIM_HandleTypeDef htim2;\nTIM_HandleTypeDef htim3;\nTIM_HandleTypeDef htim4;\nTIM_HandleTypeDef htim5;\nTIM_HandleTypeDef htim8;\nTIM_HandleTypeDef htim13;\n\n/* TIM1 init function */\nvoid MX_TIM1_Init(void)\n{\n  TIM_ClockConfigTypeDef sClockSourceConfig;\n  TIM_MasterConfigTypeDef sMasterConfig;\n  TIM_OC_InitTypeDef sConfigOC;\n  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig;\n\n  htim1.Instance = TIM1;\n  htim1.Init.Prescaler = 0;\n  htim1.Init.CounterMode = TIM_COUNTERMODE_CENTERALIGNED3;\n  htim1.Init.Period = TIM_1_8_PERIOD_CLOCKS;\n  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;\n  htim1.Init.RepetitionCounter = TIM_1_8_RCR;\n  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;\n  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  if (HAL_TIM_OC_Init(&htim1) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;\n  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;\n  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sConfigOC.OCMode = TIM_OCMODE_PWM2;\n  sConfigOC.Pulse = 0;\n  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;\n  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;\n  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;\n  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;\n  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;\n  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sConfigOC.OCMode = TIM_OCMODE_TIMING;\n  if (HAL_TIM_OC_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_ENABLE;\n  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_ENABLE;\n  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;\n  sBreakDeadTimeConfig.DeadTime = TIM_1_8_DEADTIME_CLOCKS;\n  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;\n  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;\n  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;\n  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  HAL_TIM_MspPostInit(&htim1);\n\n}\n/* TIM2 init function */\nvoid MX_TIM2_Init(void)\n{\n  TIM_MasterConfigTypeDef sMasterConfig;\n  TIM_OC_InitTypeDef sConfigOC;\n\n  htim2.Instance = TIM2;\n  htim2.Init.Prescaler = 0;\n  htim2.Init.CounterMode = TIM_COUNTERMODE_CENTERALIGNED3;\n  htim2.Init.Period = TIM_APB1_PERIOD_CLOCKS;\n  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;\n  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;\n  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;\n  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sConfigOC.OCMode = TIM_OCMODE_PWM2;\n  sConfigOC.Pulse = 0;\n  sConfigOC.OCPolarity = TIM_OCPOLARITY_LOW;\n  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;\n  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sConfigOC.Pulse = TIM_APB1_PERIOD_CLOCKS+1;\n  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;\n  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  HAL_TIM_MspPostInit(&htim2);\n\n}\n/* TIM3 init function */\nvoid MX_TIM3_Init(void)\n{\n  TIM_Encoder_InitTypeDef sConfig;\n  TIM_MasterConfigTypeDef sMasterConfig;\n\n  htim3.Instance = TIM3;\n  htim3.Init.Prescaler = 0;\n  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;\n  htim3.Init.Period = 0xffff;\n  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;\n  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;\n  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;\n  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;\n  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;\n  sConfig.IC1Filter = 4;\n  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;\n  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;\n  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;\n  sConfig.IC2Filter = 4;\n  if (HAL_TIM_Encoder_Init(&htim3, &sConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;\n  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;\n  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n}\n/* TIM4 init function */\nvoid MX_TIM4_Init(void)\n{\n  TIM_Encoder_InitTypeDef sConfig;\n  TIM_MasterConfigTypeDef sMasterConfig;\n\n  htim4.Instance = TIM4;\n  htim4.Init.Prescaler = 0;\n  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;\n  htim4.Init.Period = 0xffff;\n  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;\n  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;\n  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;\n  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;\n  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;\n  sConfig.IC1Filter = 4;\n  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;\n  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;\n  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;\n  sConfig.IC2Filter = 4;\n  if (HAL_TIM_Encoder_Init(&htim4, &sConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;\n  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;\n  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n}\n/* TIM5 init function */\nvoid MX_TIM5_Init(void)\n{\n  TIM_MasterConfigTypeDef sMasterConfig;\n  TIM_IC_InitTypeDef sConfigIC;\n\n  htim5.Instance = TIM5;\n  htim5.Init.Prescaler = 0;\n  htim5.Init.CounterMode = TIM_COUNTERMODE_UP;\n  htim5.Init.Period = 0xFFFFFFFF;\n  htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;\n  if (HAL_TIM_IC_Init(&htim5) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;\n  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;\n  if (HAL_TIMEx_MasterConfigSynchronization(&htim5, &sMasterConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_BOTHEDGE;\n  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;\n  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;\n  sConfigIC.ICFilter = 15;\n  if (HAL_TIM_IC_ConfigChannel(&htim5, &sConfigIC, TIM_CHANNEL_3) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  if (HAL_TIM_IC_ConfigChannel(&htim5, &sConfigIC, TIM_CHANNEL_4) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n}\n/* TIM8 init function */\nvoid MX_TIM8_Init(void)\n{\n  TIM_MasterConfigTypeDef sMasterConfig;\n  TIM_OC_InitTypeDef sConfigOC;\n  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig;\n\n  htim8.Instance = TIM8;\n  htim8.Init.Prescaler = 0;\n  htim8.Init.CounterMode = TIM_COUNTERMODE_CENTERALIGNED3;\n  htim8.Init.Period = TIM_1_8_PERIOD_CLOCKS;\n  htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;\n  htim8.Init.RepetitionCounter = TIM_1_8_RCR;\n  if (HAL_TIM_PWM_Init(&htim8) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;\n  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;\n  if (HAL_TIMEx_MasterConfigSynchronization(&htim8, &sMasterConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sConfigOC.OCMode = TIM_OCMODE_PWM2;\n  sConfigOC.Pulse = 0;\n  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;\n  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;\n  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;\n  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;\n  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;\n  if (HAL_TIM_PWM_ConfigChannel(&htim8, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  if (HAL_TIM_PWM_ConfigChannel(&htim8, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  if (HAL_TIM_PWM_ConfigChannel(&htim8, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_ENABLE;\n  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_ENABLE;\n  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;\n  sBreakDeadTimeConfig.DeadTime = TIM_1_8_DEADTIME_CLOCKS;\n  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;\n  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;\n  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;\n  if (HAL_TIMEx_ConfigBreakDeadTime(&htim8, &sBreakDeadTimeConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n  HAL_TIM_MspPostInit(&htim8);\n\n}\n/* TIM13 init function */\nvoid MX_TIM13_Init(void)\n{\n\n  htim13.Instance = TIM13;\n  htim13.Init.Prescaler = 0;\n  htim13.Init.CounterMode = TIM_COUNTERMODE_UP;\n  htim13.Init.Period = (2 * TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR+1)) * ((float)TIM_APB1_CLOCK_HZ / (float)TIM_1_8_CLOCK_HZ) - 1;\n  htim13.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;\n  if (HAL_TIM_Base_Init(&htim13) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n}\n\nvoid HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)\n{\n\n  if(tim_baseHandle->Instance==TIM1)\n  {\n  /* USER CODE BEGIN TIM1_MspInit 0 */\n\n  /* USER CODE END TIM1_MspInit 0 */\n    /* TIM1 clock enable */\n    __HAL_RCC_TIM1_CLK_ENABLE();\n  /* USER CODE BEGIN TIM1_MspInit 1 */\n\n  /* USER CODE END TIM1_MspInit 1 */\n  }\n  else if(tim_baseHandle->Instance==TIM13)\n  {\n  /* USER CODE BEGIN TIM13_MspInit 0 */\n\n  /* USER CODE END TIM13_MspInit 0 */\n    /* TIM13 clock enable */\n    __HAL_RCC_TIM13_CLK_ENABLE();\n  /* USER CODE BEGIN TIM13_MspInit 1 */\n\n  /* USER CODE END TIM13_MspInit 1 */\n  }\n}\n\nvoid HAL_TIM_PWM_MspInit(TIM_HandleTypeDef* tim_pwmHandle)\n{\n\n  if(tim_pwmHandle->Instance==TIM2)\n  {\n  /* USER CODE BEGIN TIM2_MspInit 0 */\n\n  /* USER CODE END TIM2_MspInit 0 */\n    /* TIM2 clock enable */\n    __HAL_RCC_TIM2_CLK_ENABLE();\n  /* USER CODE BEGIN TIM2_MspInit 1 */\n\n  /* USER CODE END TIM2_MspInit 1 */\n  }\n  else if(tim_pwmHandle->Instance==TIM8)\n  {\n  /* USER CODE BEGIN TIM8_MspInit 0 */\n\n  /* USER CODE END TIM8_MspInit 0 */\n    /* TIM8 clock enable */\n    __HAL_RCC_TIM8_CLK_ENABLE();\n  /* USER CODE BEGIN TIM8_MspInit 1 */\n\n  /* USER CODE END TIM8_MspInit 1 */\n  }\n}\n\nvoid HAL_TIM_Encoder_MspInit(TIM_HandleTypeDef* tim_encoderHandle)\n{\n\n  if(tim_encoderHandle->Instance==TIM3)\n  {\n  /* USER CODE BEGIN TIM3_MspInit 0 */\n\n  /* USER CODE END TIM3_MspInit 0 */\n    /* TIM3 clock enable */\n    __HAL_RCC_TIM3_CLK_ENABLE();\n\n  /* USER CODE BEGIN TIM3_MspInit 1 */\n\n  /* USER CODE END TIM3_MspInit 1 */\n  }\n  else if(tim_encoderHandle->Instance==TIM4)\n  {\n  /* USER CODE BEGIN TIM4_MspInit 0 */\n\n  /* USER CODE END TIM4_MspInit 0 */\n    /* TIM4 clock enable */\n    __HAL_RCC_TIM4_CLK_ENABLE();\n\n  /* USER CODE BEGIN TIM4_MspInit 1 */\n\n  /* USER CODE END TIM4_MspInit 1 */\n  }\n}\n\nvoid HAL_TIM_IC_MspInit(TIM_HandleTypeDef* tim_icHandle)\n{\n\n  if(tim_icHandle->Instance==TIM5)\n  {\n  /* USER CODE BEGIN TIM5_MspInit 0 */\n\n  /* USER CODE END TIM5_MspInit 0 */\n    /* TIM5 clock enable */\n    __HAL_RCC_TIM5_CLK_ENABLE();\n\n    /* TIM5 interrupt Init */\n    HAL_NVIC_SetPriority(TIM5_IRQn, 1, 0);\n    HAL_NVIC_EnableIRQ(TIM5_IRQn);\n  /* USER CODE BEGIN TIM5_MspInit 1 */\n\n  /* USER CODE END TIM5_MspInit 1 */\n  }\n}\nvoid HAL_TIM_MspPostInit(TIM_HandleTypeDef* timHandle)\n{\n\n  GPIO_InitTypeDef GPIO_InitStruct;\n  if(timHandle->Instance==TIM1)\n  {\n  /* USER CODE BEGIN TIM1_MspPostInit 0 */\n\n  /* USER CODE END TIM1_MspPostInit 0 */\n    /**TIM1 GPIO Configuration    \n    PB13     ------> TIM1_CH1N\n    PB14     ------> TIM1_CH2N\n    PB15     ------> TIM1_CH3N\n    PA8     ------> TIM1_CH1\n    PA9     ------> TIM1_CH2\n    PA10     ------> TIM1_CH3 \n    */\n    GPIO_InitStruct.Pin = M0_AL_Pin|M0_BL_Pin|M0_CL_Pin;\n    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n    GPIO_InitStruct.Pull = GPIO_NOPULL;\n    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n    GPIO_InitStruct.Alternate = GPIO_AF1_TIM1;\n    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);\n\n    GPIO_InitStruct.Pin = M0_AH_Pin|M0_BH_Pin|M0_CH_Pin;\n    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n    GPIO_InitStruct.Pull = GPIO_NOPULL;\n    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n    GPIO_InitStruct.Alternate = GPIO_AF1_TIM1;\n    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);\n\n  /* USER CODE BEGIN TIM1_MspPostInit 1 */\n\n  /* USER CODE END TIM1_MspPostInit 1 */\n  }\n  else if(timHandle->Instance==TIM2)\n  {\n  /* USER CODE BEGIN TIM2_MspPostInit 0 */\n\n  /* USER CODE END TIM2_MspPostInit 0 */\n  \n    /**TIM2 GPIO Configuration    \n    PB10     ------> TIM2_CH3\n    PB11     ------> TIM2_CH4 \n    */\n    GPIO_InitStruct.Pin = AUX_L_Pin|AUX_H_Pin;\n    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n    GPIO_InitStruct.Pull = GPIO_NOPULL;\n    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n    GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;\n    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);\n\n  /* USER CODE BEGIN TIM2_MspPostInit 1 */\n\n  /* USER CODE END TIM2_MspPostInit 1 */\n  }\n  else if(timHandle->Instance==TIM8)\n  {\n  /* USER CODE BEGIN TIM8_MspPostInit 0 */\n\n  /* USER CODE END TIM8_MspPostInit 0 */\n  \n    /**TIM8 GPIO Configuration    \n    PA7     ------> TIM8_CH1N\n    PB0     ------> TIM8_CH2N\n    PB1     ------> TIM8_CH3N\n    PC6     ------> TIM8_CH1\n    PC7     ------> TIM8_CH2\n    PC8     ------> TIM8_CH3 \n    */\n    GPIO_InitStruct.Pin = M1_AL_Pin;\n    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n    GPIO_InitStruct.Pull = GPIO_NOPULL;\n    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n    GPIO_InitStruct.Alternate = GPIO_AF3_TIM8;\n    HAL_GPIO_Init(M1_AL_GPIO_Port, &GPIO_InitStruct);\n\n    GPIO_InitStruct.Pin = M1_BL_Pin|M1_CL_Pin;\n    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n    GPIO_InitStruct.Pull = GPIO_NOPULL;\n    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n    GPIO_InitStruct.Alternate = GPIO_AF3_TIM8;\n    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);\n\n    GPIO_InitStruct.Pin = M1_AH_Pin|M1_BH_Pin|M1_CH_Pin;\n    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;\n    GPIO_InitStruct.Pull = GPIO_NOPULL;\n    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n    GPIO_InitStruct.Alternate = GPIO_AF3_TIM8;\n    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);\n\n  /* USER CODE BEGIN TIM8_MspPostInit 1 */\n\n  /* USER CODE END TIM8_MspPostInit 1 */\n  }\n\n}\n\nvoid HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)\n{\n\n  if(tim_baseHandle->Instance==TIM1)\n  {\n  /* USER CODE BEGIN TIM1_MspDeInit 0 */\n\n  /* USER CODE END TIM1_MspDeInit 0 */\n    /* Peripheral clock disable */\n    __HAL_RCC_TIM1_CLK_DISABLE();\n\n    /* TIM1 interrupt Deinit */\n  /* USER CODE BEGIN TIM1_MspDeInit 1 */\n\n  /* USER CODE END TIM1_MspDeInit 1 */\n  }\n  else if(tim_baseHandle->Instance==TIM13)\n  {\n  /* USER CODE BEGIN TIM13_MspDeInit 0 */\n\n  /* USER CODE END TIM13_MspDeInit 0 */\n    /* Peripheral clock disable */\n    __HAL_RCC_TIM13_CLK_DISABLE();\n\n    /* TIM13 interrupt Deinit */\n  /* USER CODE BEGIN TIM13:TIM8_UP_TIM13_IRQn disable */\n    /**\n    * Uncomment the line below to disable the \"TIM8_UP_TIM13_IRQn\" interrupt\n    * Be aware, disabling shared interrupt may affect other IPs\n    */\n    /* HAL_NVIC_DisableIRQ(TIM8_UP_TIM13_IRQn); */\n  /* USER CODE END TIM13:TIM8_UP_TIM13_IRQn disable */\n\n  /* USER CODE BEGIN TIM13_MspDeInit 1 */\n\n  /* USER CODE END TIM13_MspDeInit 1 */\n  }\n}\n\nvoid HAL_TIM_PWM_MspDeInit(TIM_HandleTypeDef* tim_pwmHandle)\n{\n\n  if(tim_pwmHandle->Instance==TIM2)\n  {\n  /* USER CODE BEGIN TIM2_MspDeInit 0 */\n\n  /* USER CODE END TIM2_MspDeInit 0 */\n    /* Peripheral clock disable */\n    __HAL_RCC_TIM2_CLK_DISABLE();\n  /* USER CODE BEGIN TIM2_MspDeInit 1 */\n\n  /* USER CODE END TIM2_MspDeInit 1 */\n  }\n  else if(tim_pwmHandle->Instance==TIM8)\n  {\n  /* USER CODE BEGIN TIM8_MspDeInit 0 */\n\n  /* USER CODE END TIM8_MspDeInit 0 */\n    /* Peripheral clock disable */\n    __HAL_RCC_TIM8_CLK_DISABLE();\n\n    /* TIM8 interrupt Deinit */\n  /* USER CODE BEGIN TIM8:TIM8_UP_TIM13_IRQn disable */\n    /**\n    * Uncomment the line below to disable the \"TIM8_UP_TIM13_IRQn\" interrupt\n    * Be aware, disabling shared interrupt may affect other IPs\n    */\n    /* HAL_NVIC_DisableIRQ(TIM8_UP_TIM13_IRQn); */\n  /* USER CODE END TIM8:TIM8_UP_TIM13_IRQn disable */\n  /* USER CODE BEGIN TIM8_MspDeInit 1 */\n\n  /* USER CODE END TIM8_MspDeInit 1 */\n  }\n}\n\nvoid HAL_TIM_Encoder_MspDeInit(TIM_HandleTypeDef* tim_encoderHandle)\n{\n\n  if(tim_encoderHandle->Instance==TIM3)\n  {\n  /* USER CODE BEGIN TIM3_MspDeInit 0 */\n\n  /* USER CODE END TIM3_MspDeInit 0 */\n    /* Peripheral clock disable */\n    __HAL_RCC_TIM3_CLK_DISABLE();\n  \n    /**TIM3 GPIO Configuration    \n    PB4     ------> TIM3_CH1\n    PB5     ------> TIM3_CH2 \n    */\n    HAL_GPIO_DeInit(GPIOB, M0_ENC_A_Pin|M0_ENC_B_Pin);\n\n  /* USER CODE BEGIN TIM3_MspDeInit 1 */\n\n  /* USER CODE END TIM3_MspDeInit 1 */\n  }\n  else if(tim_encoderHandle->Instance==TIM4)\n  {\n  /* USER CODE BEGIN TIM4_MspDeInit 0 */\n\n  /* USER CODE END TIM4_MspDeInit 0 */\n    /* Peripheral clock disable */\n    __HAL_RCC_TIM4_CLK_DISABLE();\n  \n    /**TIM4 GPIO Configuration    \n    PB6     ------> TIM4_CH1\n    PB7     ------> TIM4_CH2 \n    */\n    HAL_GPIO_DeInit(GPIOB, M1_ENC_A_Pin|M1_ENC_B_Pin);\n\n  /* USER CODE BEGIN TIM4_MspDeInit 1 */\n\n  /* USER CODE END TIM4_MspDeInit 1 */\n  }\n}\n\nvoid HAL_TIM_IC_MspDeInit(TIM_HandleTypeDef* tim_icHandle)\n{\n\n  if(tim_icHandle->Instance==TIM5)\n  {\n  /* USER CODE BEGIN TIM5_MspDeInit 0 */\n\n  /* USER CODE END TIM5_MspDeInit 0 */\n    /* Peripheral clock disable */\n    __HAL_RCC_TIM5_CLK_DISABLE();\n  \n    /**TIM5 GPIO Configuration    \n    PA2     ------> TIM5_CH3\n    PA3     ------> TIM5_CH4 \n    */\n    HAL_GPIO_DeInit(GPIOA, GPIO_3_Pin|GPIO_4_Pin);\n\n    /* TIM5 interrupt Deinit */\n    HAL_NVIC_DisableIRQ(TIM5_IRQn);\n  /* USER CODE BEGIN TIM5_MspDeInit 1 */\n\n  /* USER CODE END TIM5_MspDeInit 1 */\n  }\n} \n\n/* USER CODE BEGIN 1 */\n\n/* USER CODE END 1 */\n\n/**\n  * @}\n  */\n\n/**\n  * @}\n  */\n\n/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/Board/v3/Src/tim.c b/Board/v3/Src/tim.c
+--- a/Board/v3/Src/tim.c	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ b/Board/v3/Src/tim.c	(date 1776762094761)
+@@ -59,7 +59,6 @@
+ TIM_HandleTypeDef htim1;
+ TIM_HandleTypeDef htim2;
+ TIM_HandleTypeDef htim3;
+-TIM_HandleTypeDef htim4;
+ TIM_HandleTypeDef htim5;
+ TIM_HandleTypeDef htim8;
+ TIM_HandleTypeDef htim13;
+@@ -224,39 +223,7 @@
+   }
+ 
+ }
+-/* TIM4 init function */
+-void MX_TIM4_Init(void)
+-{
+-  TIM_Encoder_InitTypeDef sConfig;
+-  TIM_MasterConfigTypeDef sMasterConfig;
+-
+-  htim4.Instance = TIM4;
+-  htim4.Init.Prescaler = 0;
+-  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+-  htim4.Init.Period = 0xffff;
+-  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+-  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
+-  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
+-  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
+-  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
+-  sConfig.IC1Filter = 4;
+-  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
+-  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
+-  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
+-  sConfig.IC2Filter = 4;
+-  if (HAL_TIM_Encoder_Init(&htim4, &sConfig) != HAL_OK)
+-  {
+-    _Error_Handler(__FILE__, __LINE__);
+-  }
+-
+-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+-  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+-  {
+-    _Error_Handler(__FILE__, __LINE__);
+-  }
+-
+-}
++
+ /* TIM5 init function */
+ void MX_TIM5_Init(void)
+ {
+@@ -294,68 +261,6 @@
+     _Error_Handler(__FILE__, __LINE__);
+   }
+ 
+-}
+-/* TIM8 init function */
+-void MX_TIM8_Init(void)
+-{
+-  TIM_MasterConfigTypeDef sMasterConfig;
+-  TIM_OC_InitTypeDef sConfigOC;
+-  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig;
+-
+-  htim8.Instance = TIM8;
+-  htim8.Init.Prescaler = 0;
+-  htim8.Init.CounterMode = TIM_COUNTERMODE_CENTERALIGNED3;
+-  htim8.Init.Period = TIM_1_8_PERIOD_CLOCKS;
+-  htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+-  htim8.Init.RepetitionCounter = TIM_1_8_RCR;
+-  if (HAL_TIM_PWM_Init(&htim8) != HAL_OK)
+-  {
+-    _Error_Handler(__FILE__, __LINE__);
+-  }
+-
+-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
+-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+-  if (HAL_TIMEx_MasterConfigSynchronization(&htim8, &sMasterConfig) != HAL_OK)
+-  {
+-    _Error_Handler(__FILE__, __LINE__);
+-  }
+-
+-  sConfigOC.OCMode = TIM_OCMODE_PWM2;
+-  sConfigOC.Pulse = 0;
+-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+-  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+-  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+-  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+-  if (HAL_TIM_PWM_ConfigChannel(&htim8, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+-  {
+-    _Error_Handler(__FILE__, __LINE__);
+-  }
+-
+-  if (HAL_TIM_PWM_ConfigChannel(&htim8, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+-  {
+-    _Error_Handler(__FILE__, __LINE__);
+-  }
+-
+-  if (HAL_TIM_PWM_ConfigChannel(&htim8, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+-  {
+-    _Error_Handler(__FILE__, __LINE__);
+-  }
+-
+-  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_ENABLE;
+-  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_ENABLE;
+-  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
+-  sBreakDeadTimeConfig.DeadTime = TIM_1_8_DEADTIME_CLOCKS;
+-  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
+-  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+-  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
+-  if (HAL_TIMEx_ConfigBreakDeadTime(&htim8, &sBreakDeadTimeConfig) != HAL_OK)
+-  {
+-    _Error_Handler(__FILE__, __LINE__);
+-  }
+-
+-  HAL_TIM_MspPostInit(&htim8);
+-
+ }
+ /* TIM13 init function */
+ void MX_TIM13_Init(void)
+@@ -531,46 +436,6 @@
+ 
+   /* USER CODE END TIM2_MspPostInit 1 */
+   }
+-  else if(timHandle->Instance==TIM8)
+-  {
+-  /* USER CODE BEGIN TIM8_MspPostInit 0 */
+-
+-  /* USER CODE END TIM8_MspPostInit 0 */
+-  
+-    /**TIM8 GPIO Configuration    
+-    PA7     ------> TIM8_CH1N
+-    PB0     ------> TIM8_CH2N
+-    PB1     ------> TIM8_CH3N
+-    PC6     ------> TIM8_CH1
+-    PC7     ------> TIM8_CH2
+-    PC8     ------> TIM8_CH3 
+-    */
+-    GPIO_InitStruct.Pin = M1_AL_Pin;
+-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+-    GPIO_InitStruct.Pull = GPIO_NOPULL;
+-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+-    GPIO_InitStruct.Alternate = GPIO_AF3_TIM8;
+-    HAL_GPIO_Init(M1_AL_GPIO_Port, &GPIO_InitStruct);
+-
+-    GPIO_InitStruct.Pin = M1_BL_Pin|M1_CL_Pin;
+-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+-    GPIO_InitStruct.Pull = GPIO_NOPULL;
+-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+-    GPIO_InitStruct.Alternate = GPIO_AF3_TIM8;
+-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+-
+-    GPIO_InitStruct.Pin = M1_AH_Pin|M1_BH_Pin|M1_CH_Pin;
+-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+-    GPIO_InitStruct.Pull = GPIO_NOPULL;
+-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+-    GPIO_InitStruct.Alternate = GPIO_AF3_TIM8;
+-    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+-
+-  /* USER CODE BEGIN TIM8_MspPostInit 1 */
+-
+-  /* USER CODE END TIM8_MspPostInit 1 */
+-  }
+-
+ }
+ 
+ void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
+@@ -669,24 +534,6 @@
+ 
+   /* USER CODE END TIM3_MspDeInit 1 */
+   }
+-  else if(tim_encoderHandle->Instance==TIM4)
+-  {
+-  /* USER CODE BEGIN TIM4_MspDeInit 0 */
+-
+-  /* USER CODE END TIM4_MspDeInit 0 */
+-    /* Peripheral clock disable */
+-    __HAL_RCC_TIM4_CLK_DISABLE();
+-  
+-    /**TIM4 GPIO Configuration    
+-    PB6     ------> TIM4_CH1
+-    PB7     ------> TIM4_CH2 
+-    */
+-    HAL_GPIO_DeInit(GPIOB, M1_ENC_A_Pin|M1_ENC_B_Pin);
+-
+-  /* USER CODE BEGIN TIM4_MspDeInit 1 */
+-
+-  /* USER CODE END TIM4_MspDeInit 1 */
+-  }
+ }
+ 
+ void HAL_TIM_IC_MspDeInit(TIM_HandleTypeDef* tim_icHandle)
+Index: Board/v3/Inc/board-v3.5.h
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>#ifndef __BOARD_CONFIG_V3_5_H\n#define __BOARD_CONFIG_V3_5_H\n\n\n// Pin Defines\n#define M0_nCS_Pin GPIO_PIN_13\n#define M0_nCS_GPIO_Port GPIOC\n#define M1_nCS_Pin GPIO_PIN_14\n#define M1_nCS_GPIO_Port GPIOC\n#define M1_ENC_Z_Pin GPIO_PIN_15\n#define M1_ENC_Z_GPIO_Port GPIOC\n#define M0_IB_Pin GPIO_PIN_0\n#define M0_IB_GPIO_Port GPIOC\n#define M0_IC_Pin GPIO_PIN_1\n#define M0_IC_GPIO_Port GPIOC\n#define M1_IC_Pin GPIO_PIN_2\n#define M1_IC_GPIO_Port GPIOC\n#define M1_IB_Pin GPIO_PIN_3\n#define M1_IB_GPIO_Port GPIOC\n#define GPIO_1_Pin GPIO_PIN_0\n#define GPIO_1_GPIO_Port GPIOA\n#define GPIO_2_Pin GPIO_PIN_1\n#define GPIO_2_GPIO_Port GPIOA\n#define GPIO_3_Pin GPIO_PIN_2\n#define GPIO_3_GPIO_Port GPIOA\n#define GPIO_4_Pin GPIO_PIN_3\n#define GPIO_4_GPIO_Port GPIOA\n#define M1_TEMP_Pin GPIO_PIN_4\n#define M1_TEMP_GPIO_Port GPIOA\n#define AUX_TEMP_Pin GPIO_PIN_5\n#define AUX_TEMP_GPIO_Port GPIOA\n#define VBUS_S_Pin GPIO_PIN_6\n#define VBUS_S_GPIO_Port GPIOA\n#define M1_AL_Pin GPIO_PIN_7\n#define M1_AL_GPIO_Port GPIOA\n#define GPIO_5_Pin GPIO_PIN_4\n#define GPIO_5_GPIO_Port GPIOC\n#define M0_TEMP_Pin GPIO_PIN_5\n#define M0_TEMP_GPIO_Port GPIOC\n#define M1_BL_Pin GPIO_PIN_0\n#define M1_BL_GPIO_Port GPIOB\n#define M1_CL_Pin GPIO_PIN_1\n#define M1_CL_GPIO_Port GPIOB\n#define GPIO_6_Pin GPIO_PIN_2\n#define GPIO_6_GPIO_Port GPIOB\n#define AUX_L_Pin GPIO_PIN_10\n#define AUX_L_GPIO_Port GPIOB\n#define AUX_H_Pin GPIO_PIN_11\n#define AUX_H_GPIO_Port GPIOB\n#define EN_GATE_Pin GPIO_PIN_12\n#define EN_GATE_GPIO_Port GPIOB\n#define M0_AL_Pin GPIO_PIN_13\n#define M0_AL_GPIO_Port GPIOB\n#define M0_BL_Pin GPIO_PIN_14\n#define M0_BL_GPIO_Port GPIOB\n#define M0_CL_Pin GPIO_PIN_15\n#define M0_CL_GPIO_Port GPIOB\n#define M1_AH_Pin GPIO_PIN_6\n#define M1_AH_GPIO_Port GPIOC\n#define M1_BH_Pin GPIO_PIN_7\n#define M1_BH_GPIO_Port GPIOC\n#define M1_CH_Pin GPIO_PIN_8\n#define M1_CH_GPIO_Port GPIOC\n#define M0_ENC_Z_Pin GPIO_PIN_9\n#define M0_ENC_Z_GPIO_Port GPIOC\n#define M0_AH_Pin GPIO_PIN_8\n#define M0_AH_GPIO_Port GPIOA\n#define M0_BH_Pin GPIO_PIN_9\n#define M0_BH_GPIO_Port GPIOA\n#define M0_CH_Pin GPIO_PIN_10\n#define M0_CH_GPIO_Port GPIOA\n#define GPIO_7_Pin GPIO_PIN_15\n#define GPIO_7_GPIO_Port GPIOA\n#define nFAULT_Pin GPIO_PIN_2\n#define nFAULT_GPIO_Port GPIOD\n#define GPIO_8_Pin GPIO_PIN_3\n#define GPIO_8_GPIO_Port GPIOB\n#define M0_ENC_A_Pin GPIO_PIN_4\n#define M0_ENC_A_GPIO_Port GPIOB\n#define M0_ENC_B_Pin GPIO_PIN_5\n#define M0_ENC_B_GPIO_Port GPIOB\n#define M1_ENC_A_Pin GPIO_PIN_6\n#define M1_ENC_A_GPIO_Port GPIOB\n#define M1_ENC_B_Pin GPIO_PIN_7\n#define M1_ENC_B_GPIO_Port GPIOB\n\n\n#define AXIS_COUNT (2)\n#define DEFAULT_ERROR_PIN 0\n#define DEFAULT_MIN_DC_VOLTAGE 8.0f\n\n#define SHUNT_RESISTANCE (500e-6f)\n#if HW_VERSION_VOLTAGE >= 48\n#define DEFAULT_BRAKE_RESISTANCE (2.0f)\n#else\n#define DEFAULT_BRAKE_RESISTANCE (0.47f)\n#endif\n#define M1_THERMISTOR_ADC_CHANNEL 4\n#define M1_STEP_GPIO_PIN 7\n#define M1_DIR_GPIO_PIN 8\n\n#define M0_THERMISTOR_ADC_CHANNEL 15\n#define M0_STEP_GPIO_PIN 1\n#define M0_DIR_GPIO_PIN 2\n#define PWM0_CHANNELS {1, 2, 3, 4}\n\n#define GPIO_COUNT 17\n#define DEFAULT_GPIO_MODES \\\n    ODriveIntf::GPIO_MODE_DIGITAL, \\\n    ODriveIntf::GPIO_MODE_UART_A, \\\n    ODriveIntf::GPIO_MODE_UART_A, \\\n    ODriveIntf::GPIO_MODE_ANALOG_IN, \\\n    ODriveIntf::GPIO_MODE_ANALOG_IN, \\\n    ODriveIntf::GPIO_MODE_ANALOG_IN, \\\n    ODriveIntf::GPIO_MODE_DIGITAL, \\\n    ODriveIntf::GPIO_MODE_DIGITAL, \\\n    ODriveIntf::GPIO_MODE_DIGITAL, \\\n    ODriveIntf::GPIO_MODE_ENC0, \\\n    ODriveIntf::GPIO_MODE_ENC0, \\\n    ODriveIntf::GPIO_MODE_DIGITAL_PULL_DOWN, \\\n    ODriveIntf::GPIO_MODE_ENC1, \\\n    ODriveIntf::GPIO_MODE_ENC1, \\\n    ODriveIntf::GPIO_MODE_DIGITAL_PULL_DOWN, \\\n    ODriveIntf::GPIO_MODE_CAN_A, \\\n    ODriveIntf::GPIO_MODE_CAN_A,\n\n#if HW_VERSION_VOLTAGE >= 48\n#define VBUS_S_DIVIDER_RATIO 19.0f\n#elif HW_VERSION_VOLTAGE == 24\n#define VBUS_S_DIVIDER_RATIO 11.0f\n#else\n#error \"unknown board voltage\"\n#endif\n\n#define BOARD_GPIOS { \\\n    {nullptr, 0}, \\\n    {GPIOA, GPIO_PIN_0}, {GPIOA, GPIO_PIN_1}, {GPIOA, GPIO_PIN_2}, {GPIOA, GPIO_PIN_3}, \\\n    {GPIOC, GPIO_PIN_4}, {GPIOB, GPIO_PIN_2}, {GPIOA, GPIO_PIN_15}, {GPIOB, GPIO_PIN_3}, \\\n    {GPIOB, GPIO_PIN_4}, {GPIOB, GPIO_PIN_5}, {GPIOC, GPIO_PIN_9}, {GPIOB, GPIO_PIN_6}, \\\n    {GPIOB, GPIO_PIN_7}, {GPIOC, GPIO_PIN_15}, {GPIOB, GPIO_PIN_8}, {GPIOB, GPIO_PIN_9} \\\n}\n\n#define BOARD_ALTERANATE_FUNCTIONS { \\\n    /* GPIO0 (inexistent): */ {{}}, \\\n    /* GPIO1: */ {{{ODrive::GPIO_MODE_UART_A, GPIO_AF8_UART4}, {ODrive::GPIO_MODE_PWM, GPIO_AF2_TIM5}}}, \\\n    /* GPIO2: */ {{{ODrive::GPIO_MODE_UART_A, GPIO_AF8_UART4}, {ODrive::GPIO_MODE_PWM, GPIO_AF2_TIM5}}}, \\\n    /* GPIO3: */ {{{ODrive::GPIO_MODE_UART_B, GPIO_AF7_USART2}, {ODrive::GPIO_MODE_PWM, GPIO_AF2_TIM5}}}, \\\n    /* GPIO4: */ {{{ODrive::GPIO_MODE_UART_B, GPIO_AF7_USART2}, {ODrive::GPIO_MODE_PWM, GPIO_AF2_TIM5}}}, \\\n    /* GPIO5: */ {{}}, \\\n    /* GPIO6: */ {{}}, \\\n    /* GPIO7: */ {{}}, \\\n    /* GPIO8: */ {{}}, \\\n    /* ENC0_A: */ {{{ODrive::GPIO_MODE_ENC0, GPIO_AF2_TIM3}}}, \\\n    /* ENC0_B: */ {{{ODrive::GPIO_MODE_ENC0, GPIO_AF2_TIM3}}}, \\\n    /* ENC0_Z: */ {{}}, \\\n    /* ENC1_A: */ {{{ODrive::GPIO_MODE_I2C_A, GPIO_AF4_I2C1}, {ODrive::GPIO_MODE_ENC1, GPIO_AF2_TIM4}}}, \\\n    /* ENC1_B: */ {{{ODrive::GPIO_MODE_I2C_A, GPIO_AF4_I2C1}, {ODrive::GPIO_MODE_ENC1, GPIO_AF2_TIM4}}}, \\\n    /* ENC1_Z: */ {{}}, \\\n    /* CAN_R: */ {{{ODrive::GPIO_MODE_CAN_A, GPIO_AF9_CAN1}, {ODrive::GPIO_MODE_I2C_A, GPIO_AF4_I2C1}}}, \\\n    /* CAN_D: */ {{{ODrive::GPIO_MODE_CAN_A, GPIO_AF9_CAN1}, {ODrive::GPIO_MODE_I2C_A, GPIO_AF4_I2C1}}}, \\\n};\n\n// v3.5 and 3.6 use the default main.h (no extra include needed)\n\n#endif\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/Board/v3/Inc/board-v3.5.h b/Board/v3/Inc/board-v3.5.h
+--- a/Board/v3/Inc/board-v3.5.h	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ b/Board/v3/Inc/board-v3.5.h	(date 1776761790695)
+@@ -5,18 +5,10 @@
+ // Pin Defines
+ #define M0_nCS_Pin GPIO_PIN_13
+ #define M0_nCS_GPIO_Port GPIOC
+-#define M1_nCS_Pin GPIO_PIN_14
+-#define M1_nCS_GPIO_Port GPIOC
+-#define M1_ENC_Z_Pin GPIO_PIN_15
+-#define M1_ENC_Z_GPIO_Port GPIOC
+ #define M0_IB_Pin GPIO_PIN_0
+ #define M0_IB_GPIO_Port GPIOC
+ #define M0_IC_Pin GPIO_PIN_1
+ #define M0_IC_GPIO_Port GPIOC
+-#define M1_IC_Pin GPIO_PIN_2
+-#define M1_IC_GPIO_Port GPIOC
+-#define M1_IB_Pin GPIO_PIN_3
+-#define M1_IB_GPIO_Port GPIOC
+ #define GPIO_1_Pin GPIO_PIN_0
+ #define GPIO_1_GPIO_Port GPIOA
+ #define GPIO_2_Pin GPIO_PIN_1
+@@ -25,22 +17,14 @@
+ #define GPIO_3_GPIO_Port GPIOA
+ #define GPIO_4_Pin GPIO_PIN_3
+ #define GPIO_4_GPIO_Port GPIOA
+-#define M1_TEMP_Pin GPIO_PIN_4
+-#define M1_TEMP_GPIO_Port GPIOA
+ #define AUX_TEMP_Pin GPIO_PIN_5
+ #define AUX_TEMP_GPIO_Port GPIOA
+ #define VBUS_S_Pin GPIO_PIN_6
+ #define VBUS_S_GPIO_Port GPIOA
+-#define M1_AL_Pin GPIO_PIN_7
+-#define M1_AL_GPIO_Port GPIOA
+ #define GPIO_5_Pin GPIO_PIN_4
+ #define GPIO_5_GPIO_Port GPIOC
+ #define M0_TEMP_Pin GPIO_PIN_5
+ #define M0_TEMP_GPIO_Port GPIOC
+-#define M1_BL_Pin GPIO_PIN_0
+-#define M1_BL_GPIO_Port GPIOB
+-#define M1_CL_Pin GPIO_PIN_1
+-#define M1_CL_GPIO_Port GPIOB
+ #define GPIO_6_Pin GPIO_PIN_2
+ #define GPIO_6_GPIO_Port GPIOB
+ #define AUX_L_Pin GPIO_PIN_10
+@@ -55,12 +39,6 @@
+ #define M0_BL_GPIO_Port GPIOB
+ #define M0_CL_Pin GPIO_PIN_15
+ #define M0_CL_GPIO_Port GPIOB
+-#define M1_AH_Pin GPIO_PIN_6
+-#define M1_AH_GPIO_Port GPIOC
+-#define M1_BH_Pin GPIO_PIN_7
+-#define M1_BH_GPIO_Port GPIOC
+-#define M1_CH_Pin GPIO_PIN_8
+-#define M1_CH_GPIO_Port GPIOC
+ #define M0_ENC_Z_Pin GPIO_PIN_9
+ #define M0_ENC_Z_GPIO_Port GPIOC
+ #define M0_AH_Pin GPIO_PIN_8
+@@ -79,13 +57,8 @@
+ #define M0_ENC_A_GPIO_Port GPIOB
+ #define M0_ENC_B_Pin GPIO_PIN_5
+ #define M0_ENC_B_GPIO_Port GPIOB
+-#define M1_ENC_A_Pin GPIO_PIN_6
+-#define M1_ENC_A_GPIO_Port GPIOB
+-#define M1_ENC_B_Pin GPIO_PIN_7
+-#define M1_ENC_B_GPIO_Port GPIOB
+ 
+ 
+-#define AXIS_COUNT (2)
+ #define DEFAULT_ERROR_PIN 0
+ #define DEFAULT_MIN_DC_VOLTAGE 8.0f
+ 
+@@ -95,9 +68,6 @@
+ #else
+ #define DEFAULT_BRAKE_RESISTANCE (0.47f)
+ #endif
+-#define M1_THERMISTOR_ADC_CHANNEL 4
+-#define M1_STEP_GPIO_PIN 7
+-#define M1_DIR_GPIO_PIN 8
+ 
+ #define M0_THERMISTOR_ADC_CHANNEL 15
+ #define M0_STEP_GPIO_PIN 1
+Index: Board/v3/Src/gpio.c
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>/**\n  ******************************************************************************\n  * File Name          : gpio.c\n  * Description        : This file provides code for the configuration\n  *                      of all used GPIO pins.\n  ******************************************************************************\n  * This notice applies to any and all portions of this file\n  * that are not between comment pairs USER CODE BEGIN and\n  * USER CODE END. Other portions of this file, whether \n  * inserted by the user or by software development tools\n  * are owned by their respective copyright owners.\n  *\n  * Copyright (c) 2018 STMicroelectronics International N.V. \n  * All rights reserved.\n  *\n  * Redistribution and use in source and binary forms, with or without \n  * modification, are permitted, provided that the following conditions are met:\n  *\n  * 1. Redistribution of source code must retain the above copyright notice, \n  *    this list of conditions and the following disclaimer.\n  * 2. Redistributions in binary form must reproduce the above copyright notice,\n  *    this list of conditions and the following disclaimer in the documentation\n  *    and/or other materials provided with the distribution.\n  * 3. Neither the name of STMicroelectronics nor the names of other \n  *    contributors to this software may be used to endorse or promote products \n  *    derived from this software without specific written permission.\n  * 4. This software, including modifications and/or derivative works of this \n  *    software, must execute solely and exclusively on microcontroller or\n  *    microprocessor devices manufactured by or for STMicroelectronics.\n  * 5. Redistribution and use of this software other than as permitted under \n  *    this license is void and will automatically terminate your rights under \n  *    this license. \n  *\n  * THIS SOFTWARE IS PROVIDED BY STMICROELECTRONICS AND CONTRIBUTORS \"AS IS\" \n  * AND ANY EXPRESS, IMPLIED OR STATUTORY WARRANTIES, INCLUDING, BUT NOT \n  * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A \n  * PARTICULAR PURPOSE AND NON-INFRINGEMENT OF THIRD PARTY INTELLECTUAL PROPERTY\n  * RIGHTS ARE DISCLAIMED TO THE FULLEST EXTENT PERMITTED BY LAW. IN NO EVENT \n  * SHALL STMICROELECTRONICS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,\n  * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT\n  * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, \n  * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF \n  * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING \n  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,\n  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n  *\n  ******************************************************************************\n  */\n\n/* Includes ------------------------------------------------------------------*/\n#include \"gpio.h\"\n/* USER CODE BEGIN 0 */\n\n/* USER CODE END 0 */\n\n/*----------------------------------------------------------------------------*/\n/* Configure GPIO                                                             */\n/*----------------------------------------------------------------------------*/\n/* USER CODE BEGIN 1 */\n\n/* USER CODE END 1 */\n\n/** Configure pins as \n        * Analog \n        * Input \n        * Output\n        * EVENT_OUT\n        * EXTI\n*/\nvoid MX_GPIO_Init(void)\n{\n\n  GPIO_InitTypeDef GPIO_InitStruct;\n\n  /* GPIO Ports Clock Enable */\n  __HAL_RCC_GPIOC_CLK_ENABLE();\n  __HAL_RCC_GPIOH_CLK_ENABLE();\n  __HAL_RCC_GPIOA_CLK_ENABLE();\n  __HAL_RCC_GPIOB_CLK_ENABLE();\n  __HAL_RCC_GPIOD_CLK_ENABLE();\n\n  /*Configure GPIO pin Output Level */\n  HAL_GPIO_WritePin(GPIOC, M0_nCS_Pin|M1_nCS_Pin, GPIO_PIN_SET);\n\n  /*Configure GPIO pin Output Level */\n  HAL_GPIO_WritePin(EN_GATE_GPIO_Port, EN_GATE_Pin, GPIO_PIN_RESET);\n\n  /*Configure GPIO pins : PCPin PCPin */\n  GPIO_InitStruct.Pin = M0_nCS_Pin|M1_nCS_Pin;\n  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;\n  GPIO_InitStruct.Pull = GPIO_NOPULL;\n  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);\n\n  /*Configure GPIO pins : PCPin PCPin PCPin */\n  GPIO_InitStruct.Pin = M1_ENC_Z_Pin|GPIO_5_Pin|M0_ENC_Z_Pin;\n  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;\n  GPIO_InitStruct.Pull = GPIO_NOPULL;\n  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);\n\n  /*Configure GPIO pin : PtPin */\n  GPIO_InitStruct.Pin = EN_GATE_Pin;\n  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;\n  GPIO_InitStruct.Pull = GPIO_NOPULL;\n  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;\n  HAL_GPIO_Init(EN_GATE_GPIO_Port, &GPIO_InitStruct);\n\n  /*Configure GPIO pin : PtPin */\n  GPIO_InitStruct.Pin = nFAULT_Pin;\n  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;\n  GPIO_InitStruct.Pull = GPIO_PULLUP;\n  HAL_GPIO_Init(nFAULT_GPIO_Port, &GPIO_InitStruct);\n\n}\n\n/* USER CODE BEGIN 2 */\n\n/* USER CODE END 2 */\n\n/**\n  * @}\n  */\n\n/**\n  * @}\n  */\n\n/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/Board/v3/Src/gpio.c b/Board/v3/Src/gpio.c
+--- a/Board/v3/Src/gpio.c	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ b/Board/v3/Src/gpio.c	(date 1776762204022)
+@@ -80,20 +80,20 @@
+   __HAL_RCC_GPIOD_CLK_ENABLE();
+ 
+   /*Configure GPIO pin Output Level */
+-  HAL_GPIO_WritePin(GPIOC, M0_nCS_Pin|M1_nCS_Pin, GPIO_PIN_SET);
++  HAL_GPIO_WritePin(GPIOC, M0_nCS_Pin, GPIO_PIN_SET);
+ 
+   /*Configure GPIO pin Output Level */
+   HAL_GPIO_WritePin(EN_GATE_GPIO_Port, EN_GATE_Pin, GPIO_PIN_RESET);
+ 
+   /*Configure GPIO pins : PCPin PCPin */
+-  GPIO_InitStruct.Pin = M0_nCS_Pin|M1_nCS_Pin;
++  GPIO_InitStruct.Pin = M0_nCS_Pin;
+   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+   GPIO_InitStruct.Pull = GPIO_NOPULL;
+   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+ 
+   /*Configure GPIO pins : PCPin PCPin PCPin */
+-  GPIO_InitStruct.Pin = M1_ENC_Z_Pin|GPIO_5_Pin|M0_ENC_Z_Pin;
++  GPIO_InitStruct.Pin = GPIO_5_Pin|M0_ENC_Z_Pin;
+   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+   GPIO_InitStruct.Pull = GPIO_NOPULL;
+   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+Index: MotorControl/odrive_main.h
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>#ifndef __ODRIVE_MAIN_H\n#define __ODRIVE_MAIN_H\n\n// Hardware configuration\n#include <board.h>\n\n#ifdef __cplusplus\n#include <communication/interface_usb.h>\n#include <communication/interface_i2c.h>\n#include <communication/interface_uart.h>\n#include <task_timer.hpp>\nextern \"C\" {\n#endif\n\n// OS includes\n#include <cmsis_os.h>\n\n// extern const float elec_rad_per_enc;\nextern uint32_t _reboot_cookie;\n\nextern uint64_t serial_number;\nextern char serial_number_str[13];\n\n#ifdef __cplusplus\n}\n\ntypedef struct {\n    bool fully_booted;\n    uint32_t uptime; // [ms]\n    uint32_t min_heap_space; // FreeRTOS heap [Bytes]\n    uint32_t max_stack_usage_axis; // minimum remaining space since startup [Bytes]\n    uint32_t max_stack_usage_usb;\n    uint32_t max_stack_usage_uart;\n    uint32_t max_stack_usage_startup;\n    uint32_t max_stack_usage_can;\n    uint32_t max_stack_usage_analog;\n\n    uint32_t stack_size_axis;\n    uint32_t stack_size_usb;\n    uint32_t stack_size_uart;\n    uint32_t stack_size_startup;\n    uint32_t stack_size_can;\n    uint32_t stack_size_analog;\n\n    int32_t prio_axis;\n    int32_t prio_usb;\n    int32_t prio_uart;\n    int32_t prio_startup;\n    int32_t prio_can;\n    int32_t prio_analog;\n\n    USBStats_t& usb = usb_stats_;\n    I2CStats_t& i2c = i2c_stats_;\n} SystemStats_t;\n\nstruct PWMMapping_t {\n    endpoint_ref_t endpoint = {0, 0};\n    float min = 0;\n    float max = 0;\n};\n\n// @brief general user configurable board configuration\nstruct BoardConfig_t {\n    ODriveIntf::GpioMode gpio_modes[GPIO_COUNT] = {\n        DEFAULT_GPIO_MODES\n    };\n\n    bool enable_uart_a = true;\n    bool enable_uart_b = false;\n    bool enable_uart_c = false;\n    uint32_t uart_a_baudrate = 115200;\n    uint32_t uart_b_baudrate = 115200;\n    uint32_t uart_c_baudrate = 115200;\n    bool enable_can_a = true;\n    bool enable_i2c_a = false;\n    ODriveIntf::StreamProtocolType uart0_protocol = ODriveIntf::STREAM_PROTOCOL_TYPE_ASCII_AND_STDOUT;\n    ODriveIntf::StreamProtocolType uart1_protocol = ODriveIntf::STREAM_PROTOCOL_TYPE_ASCII_AND_STDOUT;\n    ODriveIntf::StreamProtocolType uart2_protocol = ODriveIntf::STREAM_PROTOCOL_TYPE_ASCII_AND_STDOUT;\n    ODriveIntf::StreamProtocolType usb_cdc_protocol = ODriveIntf::STREAM_PROTOCOL_TYPE_ASCII_AND_STDOUT;\n    float max_regen_current = 0.0f;\n    float brake_resistance = DEFAULT_BRAKE_RESISTANCE;\n    bool enable_brake_resistor = false;\n    float dc_bus_undervoltage_trip_level = DEFAULT_MIN_DC_VOLTAGE;      //<! [V] minimum voltage below which the motor stops operating\n    float dc_bus_overvoltage_trip_level = 1.07f * HW_VERSION_VOLTAGE;   //<! [V] maximum voltage above which the motor stops operating.\n                                                                        //<! This protects against cases in which the power supply fails to dissipate\n                                                                        //<! the brake power if the brake resistor is disabled.\n                                                                        //<! The default is 26V for the 24V board version and 52V for the 48V board version.\n\n    /**\n     * If enabled, if the measured DC voltage exceeds `dc_bus_overvoltage_ramp_start`,\n     * the ODrive will sink more power than usual into the the brake resistor\n     * in an attempt to bring the voltage down again.\n     * \n     * The brake duty cycle is increased by the following amount:\n     *  vbus_voltage == dc_bus_overvoltage_ramp_start  =>  brake_duty_cycle += 0%\n     *  vbus_voltage == dc_bus_overvoltage_ramp_end  =>  brake_duty_cycle += 100%\n     * \n     * Remarks:\n     *  - This feature is active even when all motors are disarmed.\n     *  - This feature is disabled if `brake_resistance` is non-positive.\n     */\n    bool enable_dc_bus_overvoltage_ramp = false;\n    float dc_bus_overvoltage_ramp_start = 1.07f * HW_VERSION_VOLTAGE; //!< See `enable_dc_bus_overvoltage_ramp`.\n                                                                      //!< Do not set this lower than your usual vbus_voltage,\n                                                                      //!< unless you like fried brake resistors.\n    float dc_bus_overvoltage_ramp_end = 1.07f * HW_VERSION_VOLTAGE; //!< See `enable_dc_bus_overvoltage_ramp`.\n                                                                    //!< Must be larger than `dc_bus_overvoltage_ramp_start`,\n                                                                    //!< otherwise the ramp feature is disabled.\n\n    float dc_max_positive_current = INFINITY; // Max current [A] the power supply can source\n    float dc_max_negative_current = -0.01f; // Max current [A] the power supply can sink. You most likely want a non-positive value here. Set to -INFINITY to disable.\n    uint32_t error_gpio_pin = DEFAULT_ERROR_PIN;\n    PWMMapping_t pwm_mappings[4];\n    PWMMapping_t analog_mappings[GPIO_COUNT];\n};\n\nstruct TaskTimes {\n    TaskTimer sampling;\n    TaskTimer control_loop_misc;\n    TaskTimer control_loop_checks;\n    TaskTimer dc_calib_wait;\n};\n\n\n// Forward Declarations\nclass Axis;\nclass Motor;\n\n// TODO: move\n// this is technically not thread-safe but practically it might be\n#define DEFINE_ENUM_FLAG_OPERATORS(ENUMTYPE) \\\ninline ENUMTYPE operator | (ENUMTYPE a, ENUMTYPE b) { return static_cast<ENUMTYPE>(static_cast<std::underlying_type_t<ENUMTYPE>>(a) | static_cast<std::underlying_type_t<ENUMTYPE>>(b)); } \\\ninline ENUMTYPE operator & (ENUMTYPE a, ENUMTYPE b) { return static_cast<ENUMTYPE>(static_cast<std::underlying_type_t<ENUMTYPE>>(a) & static_cast<std::underlying_type_t<ENUMTYPE>>(b)); } \\\ninline ENUMTYPE operator ^ (ENUMTYPE a, ENUMTYPE b) { return static_cast<ENUMTYPE>(static_cast<std::underlying_type_t<ENUMTYPE>>(a) ^ static_cast<std::underlying_type_t<ENUMTYPE>>(b)); } \\\ninline ENUMTYPE &operator |= (ENUMTYPE &a, ENUMTYPE b) { return reinterpret_cast<ENUMTYPE&>(reinterpret_cast<std::underlying_type_t<ENUMTYPE>&>(a) |= static_cast<std::underlying_type_t<ENUMTYPE>>(b)); } \\\ninline ENUMTYPE &operator &= (ENUMTYPE &a, ENUMTYPE b) { return reinterpret_cast<ENUMTYPE&>(reinterpret_cast<std::underlying_type_t<ENUMTYPE>&>(a) &= static_cast<std::underlying_type_t<ENUMTYPE>>(b)); } \\\ninline ENUMTYPE &operator ^= (ENUMTYPE &a, ENUMTYPE b) { return reinterpret_cast<ENUMTYPE&>(reinterpret_cast<std::underlying_type_t<ENUMTYPE>&>(a) ^= static_cast<std::underlying_type_t<ENUMTYPE>>(b)); } \\\ninline ENUMTYPE operator ~ (ENUMTYPE a) { return static_cast<ENUMTYPE>(~static_cast<std::underlying_type_t<ENUMTYPE>>(a)); }\n\n#include \"autogen/interfaces.hpp\"\n\n// ODrive specific includes\n#include <utils.hpp>\n#include <low_level.h>\n#include <encoder.hpp>\n#include <sensorless_estimator.hpp>\n#include <controller.hpp>\n#include <current_limiter.hpp>\n#include <thermistor.hpp>\n#include <trapTraj.hpp>\n#include <endstop.hpp>\n#include <mechanical_brake.hpp>\n#include <axis.hpp>\n#include <oscilloscope.hpp>\n#include <communication/communication.h>\n#include <communication/can/odrive_can.hpp>\n\n// Defined in autogen/version.c based on git-derived version numbers\nextern \"C\" {\nextern const unsigned char fw_version_major_;\nextern const unsigned char fw_version_minor_;\nextern const unsigned char fw_version_revision_;\nextern const unsigned char fw_version_unreleased_;\n}\n\nstatic Stm32Gpio get_gpio(size_t gpio_num) {\n    return (gpio_num < GPIO_COUNT) ? gpios[gpio_num] : GPIO_COUNT ? gpios[0] : Stm32Gpio::none;\n}\n\n// general system functions defined in main.cpp\nclass ODrive : public ODriveIntf {\npublic:\n    bool save_configuration() override;\n    void erase_configuration() override;\n    void reboot() override { NVIC_SystemReset(); }\n    void enter_dfu_mode() override;\n    bool any_error();\n    void clear_errors() override;\n\n    float get_adc_voltage(uint32_t gpio) override {\n        return ::get_adc_voltage(get_gpio(gpio));\n    }\n\n    int32_t test_function(int32_t delta) override {\n        static int cnt = 0;\n        return cnt += delta;\n    }\n\n    void do_fast_checks();\n    void sampling_cb();\n    void control_loop_cb(uint32_t timestamp);\n\n    Axis& get_axis(int num) { return axes[num]; }\n\n    uint32_t get_interrupt_status(int32_t irqn);\n    uint32_t get_dma_status(uint8_t stream_num);\n    uint32_t get_gpio_states();\n    uint64_t get_drv_fault();\n    void disarm_with_error(Error error);\n\n    Error error_ = ERROR_NONE;\n    float& vbus_voltage_ = ::vbus_voltage; // TODO: make this the actual variable\n    float& ibus_ = ::ibus_; // TODO: make this the actual variable\n    float ibus_report_filter_k_ = 1.0f;\n\n    const uint64_t& serial_number_ = ::serial_number;\n\n    // Hardware version is compared with OTP on startup to ensure that we're\n    // running on the right board version.\n    const uint8_t hw_version_major_ = HW_VERSION_MAJOR;\n    const uint8_t hw_version_minor_ = HW_VERSION_MINOR;\n    const uint8_t hw_version_variant_ = HW_VERSION_VOLTAGE;\n\n    // the corresponding macros are defined in the autogenerated version.h\n    const uint8_t fw_version_major_ = ::fw_version_major_;\n    const uint8_t fw_version_minor_ = ::fw_version_minor_;\n    const uint8_t fw_version_revision_ = ::fw_version_revision_;\n    const uint8_t fw_version_unreleased_ = ::fw_version_unreleased_; // 0 for official releases, 1 otherwise\n\n    bool& brake_resistor_armed_ = ::brake_resistor_armed; // TODO: make this the actual variable\n    bool& brake_resistor_saturated_ = ::brake_resistor_saturated; // TODO: make this the actual variable\n    float& brake_resistor_current_ = ::brake_resistor_current;\n\n    SystemStats_t system_stats_;\n\n    // Edit these to suit your capture needs\n    Oscilloscope oscilloscope_{\n        nullptr, // trigger_src\n        0.5f, // trigger_threshold\n        nullptr // data_src TODO: change data type\n    };\n\n    ODriveCAN can_;\n\n    BoardConfig_t config_;\n    uint32_t user_config_loaded_ = 0;\n    bool misconfigured_ = false;\n\n    uint32_t test_property_ = 0;\n\n    uint32_t last_update_timestamp_ = 0;\n    uint32_t n_evt_sampling_ = 0;\n    uint32_t n_evt_control_loop_ = 0;\n    bool task_timers_armed_ = false;\n    TaskTimes task_times_;\n    const bool otp_valid_ = ((uint8_t*)FLASH_OTP_BASE)[0] != 0xff;\n};\n\nextern ODrive odrv; // defined in main.cpp\n\n#endif // __cplusplus\n\n#endif /* __ODRIVE_MAIN_H */\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/MotorControl/odrive_main.h b/MotorControl/odrive_main.h
+--- a/MotorControl/odrive_main.h	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ b/MotorControl/odrive_main.h	(date 1776762267084)
+@@ -153,7 +153,6 @@
+ #include <axis.hpp>
+ #include <oscilloscope.hpp>
+ #include <communication/communication.h>
+-#include <communication/can/odrive_can.hpp>
+ 
+ // Defined in autogen/version.c based on git-derived version numbers
+ extern "C" {
+@@ -190,7 +189,7 @@
+     void sampling_cb();
+     void control_loop_cb(uint32_t timestamp);
+ 
+-    Axis& get_axis(int num) { return axes[num]; }
++    Axis& get_axis(int num) { return axis; }
+ 
+     uint32_t get_interrupt_status(int32_t irqn);
+     uint32_t get_dma_status(uint8_t stream_num);
+@@ -230,7 +229,6 @@
+         nullptr // data_src TODO: change data type
+     };
+ 
+-    ODriveCAN can_;
+ 
+     BoardConfig_t config_;
+     uint32_t user_config_loaded_ = 0;
+Index: Board/v3/Src/adc.c
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>/**\n  ******************************************************************************\n  * File Name          : ADC.c\n  * Description        : This file provides code for the configuration\n  *                      of the ADC instances.\n  ******************************************************************************\n  * This notice applies to any and all portions of this file\n  * that are not between comment pairs USER CODE BEGIN and\n  * USER CODE END. Other portions of this file, whether \n  * inserted by the user or by software development tools\n  * are owned by their respective copyright owners.\n  *\n  * Copyright (c) 2018 STMicroelectronics International N.V. \n  * All rights reserved.\n  *\n  * Redistribution and use in source and binary forms, with or without \n  * modification, are permitted, provided that the following conditions are met:\n  *\n  * 1. Redistribution of source code must retain the above copyright notice, \n  *    this list of conditions and the following disclaimer.\n  * 2. Redistributions in binary form must reproduce the above copyright notice,\n  *    this list of conditions and the following disclaimer in the documentation\n  *    and/or other materials provided with the distribution.\n  * 3. Neither the name of STMicroelectronics nor the names of other \n  *    contributors to this software may be used to endorse or promote products \n  *    derived from this software without specific written permission.\n  * 4. This software, including modifications and/or derivative works of this \n  *    software, must execute solely and exclusively on microcontroller or\n  *    microprocessor devices manufactured by or for STMicroelectronics.\n  * 5. Redistribution and use of this software other than as permitted under \n  *    this license is void and will automatically terminate your rights under \n  *    this license. \n  *\n  * THIS SOFTWARE IS PROVIDED BY STMICROELECTRONICS AND CONTRIBUTORS \"AS IS\" \n  * AND ANY EXPRESS, IMPLIED OR STATUTORY WARRANTIES, INCLUDING, BUT NOT \n  * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A \n  * PARTICULAR PURPOSE AND NON-INFRINGEMENT OF THIRD PARTY INTELLECTUAL PROPERTY\n  * RIGHTS ARE DISCLAIMED TO THE FULLEST EXTENT PERMITTED BY LAW. IN NO EVENT \n  * SHALL STMICROELECTRONICS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,\n  * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT\n  * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, \n  * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF \n  * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING \n  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,\n  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n  *\n  ******************************************************************************\n  */\n\n/* Includes ------------------------------------------------------------------*/\n#include \"adc.h\"\n\n#include \"gpio.h\"\n#include \"dma.h\"\n\n/* USER CODE BEGIN 0 */\n\n/* USER CODE END 0 */\n\nADC_HandleTypeDef hadc1;\nADC_HandleTypeDef hadc2;\nADC_HandleTypeDef hadc3;\nDMA_HandleTypeDef hdma_adc1;\n\n/* ADC1 init function */\nvoid MX_ADC1_Init(void)\n{\n  ADC_ChannelConfTypeDef sConfig;\n  ADC_InjectionConfTypeDef sConfigInjected;\n\n    /**Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion) \n    */\n  hadc1.Instance = ADC1;\n  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;\n  hadc1.Init.Resolution = ADC_RESOLUTION_12B;\n  hadc1.Init.ScanConvMode = DISABLE;\n  hadc1.Init.ContinuousConvMode = DISABLE;\n  hadc1.Init.DiscontinuousConvMode = DISABLE;\n  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;\n  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;\n  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;\n  hadc1.Init.NbrOfConversion = 1;\n  hadc1.Init.DMAContinuousRequests = DISABLE;\n  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;\n  if (HAL_ADC_Init(&hadc1) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n    /**Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time. \n    */\n  sConfig.Channel = ADC_CHANNEL_6;\n  sConfig.Rank = 1;\n  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;\n  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n    /**Configures for the selected ADC injected channel its corresponding rank in the sequencer and its sample time \n    */\n  sConfigInjected.InjectedChannel = ADC_CHANNEL_6;\n  sConfigInjected.InjectedRank = 1;\n  sConfigInjected.InjectedNbrOfConversion = 1;\n  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_3CYCLES;\n  sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONVEDGE_RISING;\n  sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJECCONV_T1_TRGO;\n  sConfigInjected.AutoInjectedConv = DISABLE;\n  sConfigInjected.InjectedDiscontinuousConvMode = DISABLE;\n  sConfigInjected.InjectedOffset = 0;\n  if (HAL_ADCEx_InjectedConfigChannel(&hadc1, &sConfigInjected) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n}\n/* ADC2 init function */\nvoid MX_ADC2_Init(void)\n{\n  ADC_ChannelConfTypeDef sConfig;\n  ADC_InjectionConfTypeDef sConfigInjected;\n\n    /**Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion) \n    */\n  hadc2.Instance = ADC2;\n  hadc2.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;\n  hadc2.Init.Resolution = ADC_RESOLUTION_12B;\n  hadc2.Init.ScanConvMode = DISABLE;\n  hadc2.Init.ContinuousConvMode = DISABLE;\n  hadc2.Init.DiscontinuousConvMode = DISABLE;\n  hadc2.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;\n  hadc2.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T8_TRGO;\n  hadc2.Init.DataAlign = ADC_DATAALIGN_RIGHT;\n  hadc2.Init.NbrOfConversion = 1;\n  hadc2.Init.DMAContinuousRequests = DISABLE;\n  hadc2.Init.EOCSelection = ADC_EOC_SINGLE_CONV;\n  if (HAL_ADC_Init(&hadc2) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n    /**Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time. \n    */\n  sConfig.Channel = ADC_CHANNEL_13;\n  sConfig.Rank = 1;\n  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;\n  if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n    /**Configures for the selected ADC injected channel its corresponding rank in the sequencer and its sample time \n    */\n  sConfigInjected.InjectedChannel = ADC_CHANNEL_10;\n  sConfigInjected.InjectedRank = 1;\n  sConfigInjected.InjectedNbrOfConversion = 1;\n  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_3CYCLES;\n  sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONVEDGE_RISING;\n  sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJECCONV_T1_TRGO;\n  sConfigInjected.AutoInjectedConv = DISABLE;\n  sConfigInjected.InjectedDiscontinuousConvMode = DISABLE;\n  sConfigInjected.InjectedOffset = 0;\n  if (HAL_ADCEx_InjectedConfigChannel(&hadc2, &sConfigInjected) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n}\n/* ADC3 init function */\nvoid MX_ADC3_Init(void)\n{\n  ADC_ChannelConfTypeDef sConfig;\n  ADC_InjectionConfTypeDef sConfigInjected;\n\n    /**Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion) \n    */\n  hadc3.Instance = ADC3;\n  hadc3.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;\n  hadc3.Init.Resolution = ADC_RESOLUTION_12B;\n  hadc3.Init.ScanConvMode = DISABLE;\n  hadc3.Init.ContinuousConvMode = DISABLE;\n  hadc3.Init.DiscontinuousConvMode = DISABLE;\n  hadc3.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;\n  hadc3.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T8_TRGO;\n  hadc3.Init.DataAlign = ADC_DATAALIGN_RIGHT;\n  hadc3.Init.NbrOfConversion = 1;\n  hadc3.Init.DMAContinuousRequests = DISABLE;\n  hadc3.Init.EOCSelection = ADC_EOC_SINGLE_CONV;\n  if (HAL_ADC_Init(&hadc3) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n    /**Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time. \n    */\n  sConfig.Channel = ADC_CHANNEL_12;\n  sConfig.Rank = 1;\n  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;\n  if (HAL_ADC_ConfigChannel(&hadc3, &sConfig) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n    /**Configures for the selected ADC injected channel its corresponding rank in the sequencer and its sample time \n    */\n  sConfigInjected.InjectedChannel = ADC_CHANNEL_11;\n  sConfigInjected.InjectedRank = 1;\n  sConfigInjected.InjectedNbrOfConversion = 1;\n  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_3CYCLES;\n  sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONVEDGE_RISING;\n  sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJECCONV_T1_TRGO;\n  sConfigInjected.AutoInjectedConv = DISABLE;\n  sConfigInjected.InjectedDiscontinuousConvMode = DISABLE;\n  sConfigInjected.InjectedOffset = 0;\n  if (HAL_ADCEx_InjectedConfigChannel(&hadc3, &sConfigInjected) != HAL_OK)\n  {\n    _Error_Handler(__FILE__, __LINE__);\n  }\n\n}\n\nvoid HAL_ADC_MspInit(ADC_HandleTypeDef* adcHandle)\n{\n\n  GPIO_InitTypeDef GPIO_InitStruct;\n  if(adcHandle->Instance==ADC1)\n  {\n  /* USER CODE BEGIN ADC1_MspInit 0 */\n\n  /* USER CODE END ADC1_MspInit 0 */\n    /* ADC1 clock enable */\n    __HAL_RCC_ADC1_CLK_ENABLE();\n  \n    /**ADC1 GPIO Configuration    \n    PC0     ------> ADC1_IN10\n    PC1     ------> ADC1_IN11\n    PC2     ------> ADC1_IN12\n    PC3     ------> ADC1_IN13\n    PA4     ------> ADC1_IN4\n    PA5     ------> ADC1_IN5\n    PA6     ------> ADC1_IN6\n    PC5     ------> ADC1_IN15 \n    */\n    GPIO_InitStruct.Pin = M0_IB_Pin|M0_IC_Pin|M1_IC_Pin|M1_IB_Pin \n                          |M0_TEMP_Pin;\n    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;\n    GPIO_InitStruct.Pull = GPIO_NOPULL;\n    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);\n\n    GPIO_InitStruct.Pin = M1_TEMP_Pin|AUX_TEMP_Pin|VBUS_S_Pin;\n    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;\n    GPIO_InitStruct.Pull = GPIO_NOPULL;\n    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);\n\n    /* ADC1 DMA Init */\n    /* ADC1 Init */\n    hdma_adc1.Instance = DMA2_Stream0;\n    hdma_adc1.Init.Channel = DMA_CHANNEL_0;\n    hdma_adc1.Init.Direction = DMA_PERIPH_TO_MEMORY;\n    hdma_adc1.Init.PeriphInc = DMA_PINC_DISABLE;\n    hdma_adc1.Init.MemInc = DMA_MINC_ENABLE;\n    hdma_adc1.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;\n    hdma_adc1.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;\n    hdma_adc1.Init.Mode = DMA_CIRCULAR;\n    hdma_adc1.Init.Priority = DMA_PRIORITY_LOW;\n    hdma_adc1.Init.FIFOMode = DMA_FIFOMODE_DISABLE;\n    if (HAL_DMA_Init(&hdma_adc1) != HAL_OK)\n    {\n      _Error_Handler(__FILE__, __LINE__);\n    }\n\n    __HAL_LINKDMA(adcHandle,DMA_Handle,hdma_adc1);\n\n  /* USER CODE BEGIN ADC1_MspInit 1 */\n\n  /* USER CODE END ADC1_MspInit 1 */\n  }\n  else if(adcHandle->Instance==ADC2)\n  {\n  /* USER CODE BEGIN ADC2_MspInit 0 */\n\n  /* USER CODE END ADC2_MspInit 0 */\n    /* ADC2 clock enable */\n    __HAL_RCC_ADC2_CLK_ENABLE();\n  \n    /**ADC2 GPIO Configuration    \n    PC0     ------> ADC2_IN10\n    PC1     ------> ADC2_IN11\n    PC2     ------> ADC2_IN12\n    PC3     ------> ADC2_IN13\n    PA4     ------> ADC2_IN4\n    PA5     ------> ADC2_IN5\n    PA6     ------> ADC2_IN6\n    PC5     ------> ADC2_IN15 \n    */\n    GPIO_InitStruct.Pin = M0_IB_Pin|M0_IC_Pin|M1_IC_Pin|M1_IB_Pin \n                          |M0_TEMP_Pin;\n    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;\n    GPIO_InitStruct.Pull = GPIO_NOPULL;\n    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);\n\n    GPIO_InitStruct.Pin = M1_TEMP_Pin|AUX_TEMP_Pin|VBUS_S_Pin;\n    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;\n    GPIO_InitStruct.Pull = GPIO_NOPULL;\n    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);\n\n  /* USER CODE BEGIN ADC2_MspInit 1 */\n\n  /* USER CODE END ADC2_MspInit 1 */\n  }\n  else if(adcHandle->Instance==ADC3)\n  {\n  /* USER CODE BEGIN ADC3_MspInit 0 */\n\n  /* USER CODE END ADC3_MspInit 0 */\n    /* ADC3 clock enable */\n    __HAL_RCC_ADC3_CLK_ENABLE();\n  \n    /**ADC3 GPIO Configuration    \n    PC0     ------> ADC3_IN10\n    PC1     ------> ADC3_IN11\n    PC2     ------> ADC3_IN12\n    PC3     ------> ADC3_IN13 \n    */\n    GPIO_InitStruct.Pin = M0_IB_Pin|M0_IC_Pin|M1_IC_Pin|M1_IB_Pin;\n    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;\n    GPIO_InitStruct.Pull = GPIO_NOPULL;\n    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);\n\n  /* USER CODE BEGIN ADC3_MspInit 1 */\n\n  /* USER CODE END ADC3_MspInit 1 */\n  }\n}\n\nvoid HAL_ADC_MspDeInit(ADC_HandleTypeDef* adcHandle)\n{\n\n  if(adcHandle->Instance==ADC1)\n  {\n  /* USER CODE BEGIN ADC1_MspDeInit 0 */\n\n  /* USER CODE END ADC1_MspDeInit 0 */\n    /* Peripheral clock disable */\n    __HAL_RCC_ADC1_CLK_DISABLE();\n  \n    /**ADC1 GPIO Configuration    \n    PC0     ------> ADC1_IN10\n    PC1     ------> ADC1_IN11\n    PC2     ------> ADC1_IN12\n    PC3     ------> ADC1_IN13\n    PA4     ------> ADC1_IN4\n    PA5     ------> ADC1_IN5\n    PA6     ------> ADC1_IN6\n    PC5     ------> ADC1_IN15 \n    */\n    HAL_GPIO_DeInit(GPIOC, M0_IB_Pin|M0_IC_Pin|M1_IC_Pin|M1_IB_Pin \n                          |M0_TEMP_Pin);\n\n    HAL_GPIO_DeInit(GPIOA, M1_TEMP_Pin|AUX_TEMP_Pin|VBUS_S_Pin);\n\n    /* ADC1 DMA DeInit */\n    HAL_DMA_DeInit(adcHandle->DMA_Handle);\n\n    /* ADC1 interrupt Deinit */\n  /* USER CODE BEGIN ADC1:ADC_IRQn disable */\n    /**\n    * Uncomment the line below to disable the \"ADC_IRQn\" interrupt\n    * Be aware, disabling shared interrupt may affect other IPs\n    */\n    /* HAL_NVIC_DisableIRQ(ADC_IRQn); */\n  /* USER CODE END ADC1:ADC_IRQn disable */\n\n  /* USER CODE BEGIN ADC1_MspDeInit 1 */\n\n  /* USER CODE END ADC1_MspDeInit 1 */\n  }\n  else if(adcHandle->Instance==ADC2)\n  {\n  /* USER CODE BEGIN ADC2_MspDeInit 0 */\n\n  /* USER CODE END ADC2_MspDeInit 0 */\n    /* Peripheral clock disable */\n    __HAL_RCC_ADC2_CLK_DISABLE();\n  \n    /**ADC2 GPIO Configuration    \n    PC0     ------> ADC2_IN10\n    PC1     ------> ADC2_IN11\n    PC2     ------> ADC2_IN12\n    PC3     ------> ADC2_IN13\n    PA4     ------> ADC2_IN4\n    PA5     ------> ADC2_IN5\n    PA6     ------> ADC2_IN6\n    PC5     ------> ADC2_IN15 \n    */\n    HAL_GPIO_DeInit(GPIOC, M0_IB_Pin|M0_IC_Pin|M1_IC_Pin|M1_IB_Pin \n                          |M0_TEMP_Pin);\n\n    HAL_GPIO_DeInit(GPIOA, M1_TEMP_Pin|AUX_TEMP_Pin|VBUS_S_Pin);\n\n    /* ADC2 interrupt Deinit */\n  /* USER CODE BEGIN ADC2:ADC_IRQn disable */\n    /**\n    * Uncomment the line below to disable the \"ADC_IRQn\" interrupt\n    * Be aware, disabling shared interrupt may affect other IPs\n    */\n    /* HAL_NVIC_DisableIRQ(ADC_IRQn); */\n  /* USER CODE END ADC2:ADC_IRQn disable */\n\n  /* USER CODE BEGIN ADC2_MspDeInit 1 */\n\n  /* USER CODE END ADC2_MspDeInit 1 */\n  }\n  else if(adcHandle->Instance==ADC3)\n  {\n  /* USER CODE BEGIN ADC3_MspDeInit 0 */\n\n  /* USER CODE END ADC3_MspDeInit 0 */\n    /* Peripheral clock disable */\n    __HAL_RCC_ADC3_CLK_DISABLE();\n  \n    /**ADC3 GPIO Configuration    \n    PC0     ------> ADC3_IN10\n    PC1     ------> ADC3_IN11\n    PC2     ------> ADC3_IN12\n    PC3     ------> ADC3_IN13 \n    */\n    HAL_GPIO_DeInit(GPIOC, M0_IB_Pin|M0_IC_Pin|M1_IC_Pin|M1_IB_Pin);\n\n    /* ADC3 interrupt Deinit */\n  /* USER CODE BEGIN ADC3:ADC_IRQn disable */\n    /**\n    * Uncomment the line below to disable the \"ADC_IRQn\" interrupt\n    * Be aware, disabling shared interrupt may affect other IPs\n    */\n    /* HAL_NVIC_DisableIRQ(ADC_IRQn); */\n  /* USER CODE END ADC3:ADC_IRQn disable */\n\n  /* USER CODE BEGIN ADC3_MspDeInit 1 */\n\n  /* USER CODE END ADC3_MspDeInit 1 */\n  }\n} \n\n/* USER CODE BEGIN 1 */\n/* USER CODE END 1 */\n\n/**\n  * @}\n  */\n\n/**\n  * @}\n  */\n\n/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/Board/v3/Src/adc.c b/Board/v3/Src/adc.c
+--- a/Board/v3/Src/adc.c	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ b/Board/v3/Src/adc.c	(date 1776762194337)
+@@ -241,13 +241,13 @@
+     PA6     ------> ADC1_IN6
+     PC5     ------> ADC1_IN15 
+     */
+-    GPIO_InitStruct.Pin = M0_IB_Pin|M0_IC_Pin|M1_IC_Pin|M1_IB_Pin 
++    GPIO_InitStruct.Pin = M0_IB_Pin|M0_IC_Pin
+                           |M0_TEMP_Pin;
+     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+     GPIO_InitStruct.Pull = GPIO_NOPULL;
+     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+ 
+-    GPIO_InitStruct.Pin = M1_TEMP_Pin|AUX_TEMP_Pin|VBUS_S_Pin;
++    GPIO_InitStruct.Pin = AUX_TEMP_Pin|VBUS_S_Pin;
+     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+     GPIO_InitStruct.Pull = GPIO_NOPULL;
+     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+@@ -293,13 +293,13 @@
+     PA6     ------> ADC2_IN6
+     PC5     ------> ADC2_IN15 
+     */
+-    GPIO_InitStruct.Pin = M0_IB_Pin|M0_IC_Pin|M1_IC_Pin|M1_IB_Pin 
++    GPIO_InitStruct.Pin = M0_IB_Pin|M0_IC_Pin
+                           |M0_TEMP_Pin;
+     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+     GPIO_InitStruct.Pull = GPIO_NOPULL;
+     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+ 
+-    GPIO_InitStruct.Pin = M1_TEMP_Pin|AUX_TEMP_Pin|VBUS_S_Pin;
++    GPIO_InitStruct.Pin = AUX_TEMP_Pin|VBUS_S_Pin;
+     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+     GPIO_InitStruct.Pull = GPIO_NOPULL;
+     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+@@ -322,7 +322,7 @@
+     PC2     ------> ADC3_IN12
+     PC3     ------> ADC3_IN13 
+     */
+-    GPIO_InitStruct.Pin = M0_IB_Pin|M0_IC_Pin|M1_IC_Pin|M1_IB_Pin;
++    GPIO_InitStruct.Pin = M0_IB_Pin|M0_IC_Pin;
+     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+     GPIO_InitStruct.Pull = GPIO_NOPULL;
+     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+@@ -354,10 +354,10 @@
+     PA6     ------> ADC1_IN6
+     PC5     ------> ADC1_IN15 
+     */
+-    HAL_GPIO_DeInit(GPIOC, M0_IB_Pin|M0_IC_Pin|M1_IC_Pin|M1_IB_Pin 
++    HAL_GPIO_DeInit(GPIOC, M0_IB_Pin|M0_IC_Pin
+                           |M0_TEMP_Pin);
+ 
+-    HAL_GPIO_DeInit(GPIOA, M1_TEMP_Pin|AUX_TEMP_Pin|VBUS_S_Pin);
++    HAL_GPIO_DeInit(GPIOA, AUX_TEMP_Pin|VBUS_S_Pin);
+ 
+     /* ADC1 DMA DeInit */
+     HAL_DMA_DeInit(adcHandle->DMA_Handle);
+@@ -393,10 +393,10 @@
+     PA6     ------> ADC2_IN6
+     PC5     ------> ADC2_IN15 
+     */
+-    HAL_GPIO_DeInit(GPIOC, M0_IB_Pin|M0_IC_Pin|M1_IC_Pin|M1_IB_Pin 
++    HAL_GPIO_DeInit(GPIOC, M0_IB_Pin|M0_IC_Pin
+                           |M0_TEMP_Pin);
+ 
+-    HAL_GPIO_DeInit(GPIOA, M1_TEMP_Pin|AUX_TEMP_Pin|VBUS_S_Pin);
++    HAL_GPIO_DeInit(GPIOA, AUX_TEMP_Pin|VBUS_S_Pin);
+ 
+     /* ADC2 interrupt Deinit */
+   /* USER CODE BEGIN ADC2:ADC_IRQn disable */
+@@ -425,7 +425,7 @@
+     PC2     ------> ADC3_IN12
+     PC3     ------> ADC3_IN13 
+     */
+-    HAL_GPIO_DeInit(GPIOC, M0_IB_Pin|M0_IC_Pin|M1_IC_Pin|M1_IB_Pin);
++    HAL_GPIO_DeInit(GPIOC, M0_IB_Pin|M0_IC_Pin);
+ 
+     /* ADC3 interrupt Deinit */
+   /* USER CODE BEGIN ADC3:ADC_IRQn disable */
+Index: Board/v3/Inc/board.h
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>/*\n* @brief Contains board specific configuration for ODrive v3.x\n*/\n\n#ifndef __BOARD_CONFIG_H\n#define __BOARD_CONFIG_H\n\n#include <stdbool.h>\n\n// STM specific includes\n#include <stm32f4xx_hal.h>\n#include <gpio.h>\n#include <spi.h>\n#include <tim.h>\n#include <can.h>\n#include <i2c.h>\n#include <usb_device.h>\n#include <main.h> // Includes board-vX.h\n#include \"cmsis_os.h\"\n\n#include <arm_math.h>\n\n#include <Drivers/STM32/stm32_system.h>\n\n#define CAN_FREQ (2000000UL)\n\n\n\n#define TIM_TIME_BASE TIM14\n\n// Run control loop at the same frequency as the current measurements.\n#define CONTROL_TIMER_PERIOD_TICKS  (2 * TIM_1_8_PERIOD_CLOCKS * (TIM_1_8_RCR + 1))\n\n#define TIM1_INIT_COUNT (TIM_1_8_PERIOD_CLOCKS / 2 - 1 * 128) // TODO: explain why this offset\n\n// The delta from the control loop timestamp to the current sense timestamp is\n// exactly 0 for M0 and TIM1_INIT_COUNT for M1.\n#define MAX_CONTROL_LOOP_UPDATE_TO_CURRENT_UPDATE_DELTA (TIM_1_8_PERIOD_CLOCKS / 2 + 1 * 128)\n\n#ifdef __cplusplus\n#include <Drivers/DRV8301/drv8301.hpp>\n#include <Drivers/STM32/stm32_gpio.hpp>\n#include <Drivers/STM32/stm32_spi_arbiter.hpp>\n#include <MotorControl/pwm_input.hpp>\n#include <MotorControl/thermistor.hpp>\n\nusing TGateDriver = Drv8301;\nusing TOpAmp = Drv8301;\n\n#include <MotorControl/motor.hpp>\n#include <MotorControl/encoder.hpp>\n\nextern std::array<Axis, AXIS_COUNT> axes;\nextern Motor motors[AXIS_COUNT];\nextern OnboardThermistorCurrentLimiter fet_thermistors[AXIS_COUNT];\nextern Encoder encoders[AXIS_COUNT];\nextern Stm32Gpio gpios[GPIO_COUNT];\n\nstruct GpioFunction { int mode = 0; uint8_t alternate_function = 0xff; };\nextern std::array<GpioFunction, 3> alternate_functions[GPIO_COUNT];\n\nextern USBD_HandleTypeDef& usb_dev_handle;\n\nextern Stm32SpiArbiter& ext_spi_arbiter;\n\nextern UART_HandleTypeDef* uart_a;\nextern UART_HandleTypeDef* uart_b;\nextern UART_HandleTypeDef* uart_c;\n\nextern PwmInput pwm0_input;\n#endif\n\n// Period in [s]\n#define CURRENT_MEAS_PERIOD ( (float)2*TIM_1_8_PERIOD_CLOCKS*(TIM_1_8_RCR+1) / (float)TIM_1_8_CLOCK_HZ )\nstatic const float current_meas_period = CURRENT_MEAS_PERIOD;\n\n// Frequency in [Hz]\n#define CURRENT_MEAS_HZ ( (float)(TIM_1_8_CLOCK_HZ) / (float)(2*TIM_1_8_PERIOD_CLOCKS*(TIM_1_8_RCR+1)) )\nstatic const int current_meas_hz = CURRENT_MEAS_HZ;\n\n// Linear range of the DRV8301 opamp output: 0.3V...5.7V. We set the upper limit\n// to 3.0V so that it's symmetric around the center point of 1.65V.\n#define CURRENT_SENSE_MIN_VOLT  0.3f\n#define CURRENT_SENSE_MAX_VOLT  3.0f\n\n// This board has no board-specific user configurations\nstatic inline bool board_read_config() { return true; }\nstatic inline bool board_write_config() { return true; }\nstatic inline void board_clear_config() { }\nstatic inline bool board_apply_config() { return true; }\n\nvoid system_init();\nbool board_init();\nvoid start_timers();\n\n#endif // __BOARD_CONFIG_H\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/Board/v3/Inc/board.h b/Board/v3/Inc/board.h
+--- a/Board/v3/Inc/board.h	(revision c821fba25d024b085775553b8d2e30e224a3fee2)
++++ b/Board/v3/Inc/board.h	(date 1776762148846)
+@@ -50,10 +50,10 @@
+ #include <MotorControl/motor.hpp>
+ #include <MotorControl/encoder.hpp>
+ 
+-extern std::array<Axis, AXIS_COUNT> axes;
+-extern Motor motors[AXIS_COUNT];
+-extern OnboardThermistorCurrentLimiter fet_thermistors[AXIS_COUNT];
+-extern Encoder encoders[AXIS_COUNT];
++extern Axis axis;
++extern Motor motor;
++extern OnboardThermistorCurrentLimiter fet_thermistor;
++extern Encoder encoder;
+ extern Stm32Gpio gpios[GPIO_COUNT];
+ 
+ struct GpioFunction { int mode = 0; uint8_t alternate_function = 0xff; };

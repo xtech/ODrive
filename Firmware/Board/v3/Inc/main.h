@@ -56,9 +56,7 @@
 /* USER CODE BEGIN Includes */
 #include "stm32f4xx_hal.h"
 
-#ifdef BOARD_CONFIG_HEADER
-#include BOARD_CONFIG_HEADER
-#endif
+#include "board-v3.5.h"
 /* USER CODE END Includes */
 
 /* Private define ------------------------------------------------------------*/
